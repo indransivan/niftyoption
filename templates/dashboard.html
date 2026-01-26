@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NIFTY MACD Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, sans-serif; background: #0a0a0a; color: white; }
+        .container { max-width: 100%; padding: 10px; }
+        .grid { display: grid; grid-template-columns: 1fr; gap: 15px; }
+        .card { background: #1a1a1a; border-radius: 12px; padding: 20px; text-align: center; }
+        .signal-buy { background: #00ff8840; border: 2px solid #00ff88; }
+        .signal-sell { background: #ff444440; border: 2px solid #ff4444; }
+        .signal-hold { background: #ffaa0040; border: 2px solid #ffaa00; }
+        .price { font-size: 2em; font-weight: bold; }
+        @media (min-width: 768px) { .grid { grid-template-columns: 1fr 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 NIFTY Options MACD</h1>
+        <div class="grid" id="signals">
+            <!-- Signals populated by WebSocket -->
+        </div>
+        <div>Last update: <span id="timestamp"></span></div>
+    </div>
+    <script>
+        const ws = new WebSocket(`ws://${location.host}/ws`);
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            document.getElementById('signals').innerHTML = `
+                <div class="card signal-${data.call_signal.toLowerCase()}">
+                    <h2>📈 CALL ${data.call_strike}</h2>
+                    <div class="price">${data.call_signal}</div>
+                    <div>MACD: ${data.call_macd.toFixed(2)}</div>
+                </div>
+                <div class="card signal-${data.put_signal.toLowerCase()}">
+                    <h2>📉 PUT ${data.put_strike}</h2>
+                    <div class="price">${data.put_signal}</div>
+                    <div>MACD: ${data.put_macd.toFixed(2)}</div>
+                </div>
+            `;
+            document.getElementById('timestamp').textContent = data.timestamp;
+        };
+    </script>
+</body>
+</html>
