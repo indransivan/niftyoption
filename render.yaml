@@ -1,1 +1,14 @@
+services:
+  - type: web
+    name: nifty-dashboard
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: BREEZE_API_KEY
+        sync: false  # Set in Render dashboard
+      - key: BREEZE_API_SECRET
+        sync: false
+      - key: BREEZE_SESSION
+        sync: false
 
