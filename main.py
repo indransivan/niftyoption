@@ -7,6 +7,10 @@ from breeze_connect import BreezeConnect
 app = FastAPI()
 breeze = None
 
+
+# -------------------------------
+# Breeze lazy init (Render-safe)
+# -------------------------------
 async def get_breeze():
     global breeze
     if breeze is None:
@@ -17,14 +21,23 @@ async def get_breeze():
         )
     return breeze
 
+
+# -------------------------------
+# Routes
+# -------------------------------
 @app.get("/")
 async def dashboard():
     return HTMLResponse(open("index.html").read())
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
+
+# -------------------------------
+# WebSocket (charts + signals)
+# -------------------------------
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
@@ -33,18 +46,30 @@ async def ws_endpoint(ws: WebSocket):
         try:
             await get_breeze()
 
+            # 🔁 TEMP MOCK DATA (replace later with Breeze + MACD)
+            labels = ["10:00", "10:15", "10:30", "10:45", "11:00"]
+
             payload = {
-                "call_signal": "BUY",
-                "call_macd": 1.12,
-                "call_strike": 26100,
-                "put_signal": "SELL",
-                "put_macd": -0.85,
-                "put_strike": 24100,
-                "timestamp": datetime.now().strftime("%H:%M:%S")
+                "call": {
+                    "strike": 26100,
+                    "signal": "BUY",
+                    "price": [102, 106, 111, 115, 118],
+                    "macd":  [0.4, 0.7, 1.0, 1.2, 1.35],
+                    "labels": labels
+                },
+                "put": {
+                    "strike": 24100,
+                    "signal": "SELL",
+                    "price": [98, 94, 90, 86, 82],
+                    "macd":  [-0.3, -0.6, -0.9, -1.1, -1.3],
+                    "labels": labels
+                },
+                "timestamp": datetime.now().strftime("%d %b %H:%M:%S")
             }
 
             await ws.send_text(json.dumps(payload))
+
         except Exception as e:
             await ws.send_text(json.dumps({"error": str(e)}))
 
-        await asyncio.sleep(300)
+        await asyncio.sleep(300)  # 5 min refresh
