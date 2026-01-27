@@ -2,54 +2,39 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NIFTY MACD Dashboard</title>
+<title>NIFTY Options Dashboard</title>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 
 <style>
 body {
-    background:#0a0a0a;
-    color:white;
-    font-family:sans-serif;
-    padding:10px;
+    margin: 0;
+    font-family: sans-serif;
+    background: #0a0a0a;
+    color: white;
+    padding: 10px;
 }
-h1 { text-align:center; }
-.grid {
-    display:grid;
-    grid-template-columns:1fr;
-    gap:20px;
+h2 { margin: 5px 0 }
+.chart {
+    height: 300px;
+    margin-bottom: 20px;
 }
-.card {
-    background:#1a1a1a;
-    border-radius:12px;
-    padding:15px;
-}
-.buy { border:2px solid #00ff88; }
-.sell { border:2px solid #ff4444; }
-
-@media(min-width:768px){
-    .grid { grid-template-columns:1fr 1fr; }
+.footer {
+    text-align: center;
+    opacity: 0.7;
 }
 </style>
 </head>
 
 <body>
 
-<h1>🚀 NIFTY Options MACD</h1>
+<h2>📈 NIFTY CALL <span id="callStrike"></span></h2>
+<div id="callChart" class="chart"></div>
 
-<div class="grid">
-    <div class="card buy">
-        <h2 id="callTitle">📈 CALL</h2>
-        <canvas id="callChart"></canvas>
-    </div>
+<h2>📉 NIFTY PUT <span id="putStrike"></span></h2>
+<div id="putChart" class="chart"></div>
 
-    <div class="card sell">
-        <h2 id="putTitle">📉 PUT</h2>
-        <canvas id="putChart"></canvas>
-    </div>
-</div>
-
-<div style="text-align:center;margin-top:10px">
+<div class="footer">
     Last update: <span id="timestamp">--</span>
 </div>
 
@@ -59,70 +44,43 @@ const ws = new WebSocket(
     location.host + "/ws"
 );
 
-let callChart, putChart;
+const chartOptions = {
+    layout: {
+        background: { color: '#0a0a0a' },
+        textColor: '#ffffff'
+    },
+    grid: {
+        vertLines: { color: '#222' },
+        horzLines: { color: '#222' }
+    },
+    timeScale: { timeVisible: true }
+};
+
+const callChart = LightweightCharts.createChart(
+    document.getElementById('callChart'),
+    chartOptions
+);
+const putChart = LightweightCharts.createChart(
+    document.getElementById('putChart'),
+    chartOptions
+);
+
+const callSeries = callChart.addCandlestickSeries();
+const putSeries = putChart.addCandlestickSeries();
 
 ws.onmessage = (event) => {
     const d = JSON.parse(event.data);
+    if (d.error) {
+        console.log(d.error);
+        return;
+    }
 
+    callSeries.setData(d.call.candles);
+    putSeries.setData(d.put.candles);
+
+    document.getElementById("callStrike").innerText = d.call.strike;
+    document.getElementById("putStrike").innerText = d.put.strike;
     document.getElementById("timestamp").innerText = d.timestamp;
-    document.getElementById("callTitle").innerText =
-        `📈 CALL ${d.call.strike} | ${d.call.signal}`;
-    document.getElementById("putTitle").innerText =
-        `📉 PUT ${d.put.strike} | ${d.put.signal}`;
-
-    // ---- CALL CHART ----
-    if (!callChart) {
-        callChart = new Chart(document.getElementById("callChart"), {
-            type: 'line',
-            data: {
-                labels: d.call.labels,
-                datasets: [
-                    {
-                        label: 'Price',
-                        data: d.call.price,
-                        borderWidth: 2
-                    },
-                    {
-                        label: 'MACD',
-                        data: d.call.macd,
-                        borderWidth: 2
-                    }
-                ]
-            }
-        });
-    } else {
-        callChart.data.labels = d.call.labels;
-        callChart.data.datasets[0].data = d.call.price;
-        callChart.data.datasets[1].data = d.call.macd;
-        callChart.update();
-    }
-
-    // ---- PUT CHART ----
-    if (!putChart) {
-        putChart = new Chart(document.getElementById("putChart"), {
-            type: 'line',
-            data: {
-                labels: d.put.labels,
-                datasets: [
-                    {
-                        label: 'Price',
-                        data: d.put.price,
-                        borderWidth: 2
-                    },
-                    {
-                        label: 'MACD',
-                        data: d.put.macd,
-                        borderWidth: 2
-                    }
-                ]
-            }
-        });
-    } else {
-        putChart.data.labels = d.put.labels;
-        putChart.data.datasets[0].data = d.put.price;
-        putChart.data.datasets[1].data = d.put.macd;
-        putChart.update();
-    }
 };
 </script>
 
