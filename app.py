@@ -40,7 +40,7 @@ def get_next_month_expiry():
         month = 1; year += 1
     last_day = calendar.monthrange(year, month)[1]
     expiry = datetime(year, month, last_day)
-    while expiry.weekday() != 3:  # Thursday
+    while expiry.weekday() != 1:  # Thursday
         expiry -= timedelta(days=1)
     # Returns (Display Format, API Format)
     return expiry.strftime("%d-%b-%Y"), expiry.strftime("%Y-%m-%dT07:00:00.000Z")
