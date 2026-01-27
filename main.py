@@ -1,17 +1,14 @@
 import os
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
+from breeze_connect import BreezeConnect  # ← ADD THIS LINE!
 import asyncio
 from datetime import datetime
-# ... your other imports
 
 app = FastAPI(title="NIFTY MACD Dashboard")
-
-# Global Breeze instance (lazy init)
 breeze = None
 
 async def get_breeze():
-    """Initialize Breeze only when needed - won't crash startup"""
     global breeze
     if breeze is None:
         try:
@@ -25,7 +22,6 @@ async def get_breeze():
             print(f"⚠️ Breeze temp unavailable: {e} (will retry)")
             breeze = None
     return breeze
-
 @app.get("/")
 async def dashboard():
     """Main dashboard - Breeze connects on first request"""
