@@ -1,60 +1,66 @@
-import os
-import json
-import asyncio
+import os, json, asyncio, random
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 from breeze_connect import BreezeConnect
 
-app = FastAPI(title="NIFTY Options Dashboard")
-
+app = FastAPI()
 breeze = None
 
 
-# ---------- Breeze Init ----------
+# ---------------- Breeze Init ----------------
 async def get_breeze():
     global breeze
-    if breeze is None:
-        breeze = BreezeConnect(api_key=os.getenv("BREEZE_API_KEY"))
-        breeze.generate_session(
-            api_secret=os.getenv("BREEZE_API_SECRET"),
-            session_token=os.getenv("BREEZE_SESSION")
-        )
-        print("✅ Breeze connected")
-    return breeze
+    try:
+        if breeze is None:
+            breeze = BreezeConnect(api_key=os.getenv("BREEZE_API_KEY"))
+            breeze.generate_session(
+                api_secret=os.getenv("BREEZE_API_SECRET"),
+                session_token=os.getenv("BREEZE_SESSION")
+            )
+        return breeze
+    except Exception as e:
+        print("Breeze unavailable:", e)
+        return None
 
 
-# ---------- Helpers ----------
-def round_to_atm(price: float) -> int:
-    return round(price / 50) * 50
-
-
-def to_candles(data):
+# ---------------- Helpers ----------------
+def generate_mock_candles(days=15):
     candles = []
-    for d in data:
+    now = datetime.now() - timedelta(days=days)
+    price = 100
+
+    for _ in range(days * 25):  # ~15 min candles
+        open_ = price
+        close = open_ + random.uniform(-2, 2)
+        high = max(open_, close) + random.uniform(0, 1)
+        low = min(open_, close) - random.uniform(0, 1)
+
         candles.append({
-            "time": int(datetime.fromisoformat(d["datetime"]).timestamp()),
-            "open": float(d["open"]),
-            "high": float(d["high"]),
-            "low": float(d["low"]),
-            "close": float(d["close"])
+            "time": int(now.timestamp()),
+            "open": round(open_, 2),
+            "high": round(high, 2),
+            "low": round(low, 2),
+            "close": round(close, 2),
         })
+
+        price = close
+        now += timedelta(minutes=15)
+
     return candles
 
 
-# ---------- Routes ----------
+def round_to_atm(price):
+    return round(price / 50) * 50
+
+
+# ---------------- Routes ----------------
 @app.get("/")
 async def dashboard():
     return HTMLResponse(open("index.html").read())
 
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-
-# ---------- WebSocket ----------
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
@@ -63,52 +69,27 @@ async def ws_endpoint(ws: WebSocket):
         try:
             b = await get_breeze()
 
-            # 1️⃣ Get NIFTY LTP
-            q = b.get_quotes(
-                stock_code="NIFTY",
-                exchange_code="NSE",
-                product_type="cash"
-            )["Success"][0]
+            # ---- Try live NIFTY LTP ----
+            ltp = 22500  # fallback
+            if b:
+                q = b.get_quotes(
+                    stock_code="NIFTY",
+                    exchange_code="NSE",
+                    product_type="cash"
+                )
+                if q and "Success" in q:
+                    ltp = float(q["Success"][0]["ltp"])
 
-            ltp = float(q["ltp"])
             atm = round_to_atm(ltp)
-
-            # 2️⃣ Time window (15 days)
-            end = datetime.now()
-            start = end - timedelta(days=15)
-
-            # 3️⃣ CALL data
-            call_raw = b.get_historical_data_v2(
-                interval="15minute",
-                from_date=start.strftime("%Y-%m-%dT09:15:00.000Z"),
-                to_date=end.strftime("%Y-%m-%dT15:30:00.000Z"),
-                stock_code="NIFTY",
-                exchange_code="NSE",
-                product_type="options",
-                right="call",
-                strike_price=atm
-            )["Success"]
-
-            # 4️⃣ PUT data
-            put_raw = b.get_historical_data_v2(
-                interval="15minute",
-                from_date=start.strftime("%Y-%m-%dT09:15:00.000Z"),
-                to_date=end.strftime("%Y-%m-%dT15:30:00.000Z"),
-                stock_code="NIFTY",
-                exchange_code="NSE",
-                product_type="options",
-                right="put",
-                strike_price=atm
-            )["Success"]
 
             payload = {
                 "call": {
                     "strike": atm,
-                    "candles": to_candles(call_raw)
+                    "candles": generate_mock_candles()
                 },
                 "put": {
                     "strike": atm,
-                    "candles": to_candles(put_raw)
+                    "candles": generate_mock_candles()
                 },
                 "timestamp": datetime.now().strftime("%H:%M:%S")
             }
@@ -116,13 +97,6 @@ async def ws_endpoint(ws: WebSocket):
             await ws.send_text(json.dumps(payload))
 
         except Exception as e:
-            await ws.send_text(json.dumps({"error": str(e)}))
+            print("WS error:", e)
 
-        # Update every 5 minutes
-        await asyncio.sleep(300)
-
-
-# ---------- Local run ----------
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+        await asyncio.sleep(5)  # fast refresh for testing
