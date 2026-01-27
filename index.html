@@ -2,57 +2,87 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NIFTY Options</title>
-
-<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-
+<title>NIFTY MACD Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-body { margin:0; background:#0a0a0a; color:white; font-family:sans-serif }
-.chart { height:300px; margin:10px }
+body { font-family: sans-serif; background:#0a0a0a; color:white; padding:15px }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:15px }
+.card { padding:20px; border-radius:12px; text-align:center; }
+.buy { background:#00ff8840; border:2px solid #00ff88; }
+.sell { background:#ff444440; border:2px solid #ff4444; }
 </style>
 </head>
-
 <body>
 
-<h3>📈 CALL <span id="callStrike"></span></h3>
-<div id="call" class="chart"></div>
+<h1>🚀 NIFTY Options MACD Dashboard</h1>
+<div class="grid" id="signals"></div>
+<div>Last update: <span id="timestamp"></span></div>
 
-<h3>📉 PUT <span id="putStrike"></span></h3>
-<div id="put" class="chart"></div>
-
-<div style="text-align:center;opacity:.6">
-Last update: <span id="time"></span>
-</div>
+<canvas id="callChart" height="300"></canvas>
+<canvas id="putChart" height="300"></canvas>
 
 <script>
+let callChart, putChart;
+
 const ws = new WebSocket(
-  (location.protocol === "https:" ? "wss://" : "ws://") +
-  location.host + "/ws"
+    (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws"
 );
 
-const options = {
-  layout: { background:{color:"#0a0a0a"}, textColor:"#fff" },
-  grid: { vertLines:{color:"#222"}, horzLines:{color:"#222"} },
-  timeScale: { timeVisible:true }
-};
+ws.onmessage = (event) => {
+    const d = JSON.parse(event.data);
 
-const callChart = LightweightCharts.createChart(document.getElementById("call"), options);
-const putChart  = LightweightCharts.createChart(document.getElementById("put"), options);
+    // Update signals
+    document.getElementById("signals").innerHTML = `
+        <div class="card buy">
+            <h2>📈 CALL ${d.call.strike}</h2>
+            <h1>ATM</h1>
+        </div>
+        <div class="card sell">
+            <h2>📉 PUT ${d.put.strike}</h2>
+            <h1>ATM</h1>
+        </div>
+    `;
+    document.getElementById("timestamp").innerText = d.timestamp;
 
-const callSeries = callChart.addCandlestickSeries();
-const putSeries  = putChart.addCandlestickSeries();
+    // Prepare candlestick data
+    const callData = d.call.candles.map(c => ({
+        x: new Date(c.time),
+        o: c.open, h: c.high, l: c.low, c: c.close
+    }));
+    const putData = d.put.candles.map(c => ({
+        x: new Date(c.time),
+        o: c.open, h: c.high, l: c.low, c: c.close
+    }));
 
-ws.onmessage = e => {
-  const d = JSON.parse(e.data);
+    const chartOptions = {
+        type: 'candlestick',
+        data: { datasets: [{ label:'Candles', data: [] }] },
+        options: { plugins: { legend: { display:false } } }
+    };
 
-  callSeries.setData(d.call.candles);
-  putSeries.setData(d.put.candles);
+    if (!callChart) {
+        callChart = new Chart(document.getElementById('callChart'), {
+            type:'candlestick',
+            data: { datasets:[{ label:'CALL', data: callData }] },
+            options: { plugins:{ legend:{ display:false } } }
+        });
+    } else {
+        callChart.data.datasets[0].data = callData;
+        callChart.update();
+    }
 
-  document.getElementById("callStrike").innerText = d.call.strike;
-  document.getElementById("putStrike").innerText  = d.put.strike;
-  document.getElementById("time").innerText = d.timestamp;
+    if (!putChart) {
+        putChart = new Chart(document.getElementById('putChart'), {
+            type:'candlestick',
+            data: { datasets:[{ label:'PUT', data: putData }] },
+            options: { plugins:{ legend:{ display:false } } }
+        });
+    } else {
+        putChart.data.datasets[0].data = putData;
+        putChart.update();
+    }
 };
 </script>
-
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.0.0/dist/chartjs-chart-financial.min.js"></script>
 </body>
 </html>
