@@ -1,22 +1,57 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>NIFTY MACD Dashboard</title>
-    <style>
-        body { font-family: sans-serif; background:#0a0a0a; color:white; padding:15px }
-        .grid { display:grid; grid-template-columns:1fr 1fr; gap:15px }
-        .card { padding:20px; border-radius:12px; text-align:center }
-        .buy { background:#00ff8840; border:2px solid #00ff88 }
-        .sell { background:#ff444440; border:2px solid #ff4444 }
-    </style>
-</head>
-<body>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NIFTY MACD Dashboard</title>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-<canvas id="callChart"></canvas>
-<canvas id="putChart"></canvas>
+<style>
+body {
+    background:#0a0a0a;
+    color:white;
+    font-family:sans-serif;
+    padding:10px;
+}
+h1 { text-align:center; }
+.grid {
+    display:grid;
+    grid-template-columns:1fr;
+    gap:20px;
+}
+.card {
+    background:#1a1a1a;
+    border-radius:12px;
+    padding:15px;
+}
+.buy { border:2px solid #00ff88; }
+.sell { border:2px solid #ff4444; }
 
+@media(min-width:768px){
+    .grid { grid-template-columns:1fr 1fr; }
+}
+</style>
+</head>
+
+<body>
+
+<h1>🚀 NIFTY Options MACD</h1>
+
+<div class="grid">
+    <div class="card buy">
+        <h2 id="callTitle">📈 CALL</h2>
+        <canvas id="callChart"></canvas>
+    </div>
+
+    <div class="card sell">
+        <h2 id="putTitle">📉 PUT</h2>
+        <canvas id="putChart"></canvas>
+    </div>
+</div>
+
+<div style="text-align:center;margin-top:10px">
+    Last update: <span id="timestamp">--</span>
+</div>
 
 <script>
 const ws = new WebSocket(
@@ -24,26 +59,72 @@ const ws = new WebSocket(
     location.host + "/ws"
 );
 
+let callChart, putChart;
+
 ws.onmessage = (event) => {
     const d = JSON.parse(event.data);
 
-    document.getElementById("signals").innerHTML = `
-        <div class="card ${d.call_signal.toLowerCase()}">
-            <h2>📈 CALL ${d.call_strike}</h2>
-            <h1>${d.call_signal}</h1>
-            <div>MACD: ${d.call_macd.toFixed(2)}</div>
-        </div>
-
-        <div class="card ${d.put_signal.toLowerCase()}">
-            <h2>📉 PUT ${d.put_strike}</h2>
-            <h1>${d.put_signal}</h1>
-            <div>MACD: ${d.put_macd.toFixed(2)}</div>
-        </div>
-    `;
-
     document.getElementById("timestamp").innerText = d.timestamp;
+    document.getElementById("callTitle").innerText =
+        `📈 CALL ${d.call.strike} | ${d.call.signal}`;
+    document.getElementById("putTitle").innerText =
+        `📉 PUT ${d.put.strike} | ${d.put.signal}`;
+
+    // ---- CALL CHART ----
+    if (!callChart) {
+        callChart = new Chart(document.getElementById("callChart"), {
+            type: 'line',
+            data: {
+                labels: d.call.labels,
+                datasets: [
+                    {
+                        label: 'Price',
+                        data: d.call.price,
+                        borderWidth: 2
+                    },
+                    {
+                        label: 'MACD',
+                        data: d.call.macd,
+                        borderWidth: 2
+                    }
+                ]
+            }
+        });
+    } else {
+        callChart.data.labels = d.call.labels;
+        callChart.data.datasets[0].data = d.call.price;
+        callChart.data.datasets[1].data = d.call.macd;
+        callChart.update();
+    }
+
+    // ---- PUT CHART ----
+    if (!putChart) {
+        putChart = new Chart(document.getElementById("putChart"), {
+            type: 'line',
+            data: {
+                labels: d.put.labels,
+                datasets: [
+                    {
+                        label: 'Price',
+                        data: d.put.price,
+                        borderWidth: 2
+                    },
+                    {
+                        label: 'MACD',
+                        data: d.put.macd,
+                        borderWidth: 2
+                    }
+                ]
+            }
+        });
+    } else {
+        putChart.data.labels = d.put.labels;
+        putChart.data.datasets[0].data = d.put.price;
+        putChart.data.datasets[1].data = d.put.macd;
+        putChart.update();
+    }
 };
 </script>
+
 </body>
 </html>
-
