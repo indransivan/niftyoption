@@ -1,1 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NIFTY MACD Dashboard</title>
+    <style>
+        body { font-family: sans-serif; background:#0a0a0a; color:white; padding:15px }
+        .grid { display:grid; grid-template-columns:1fr 1fr; gap:15px }
+        .card { padding:20px; border-radius:12px; text-align:center }
+        .buy { background:#00ff8840; border:2px solid #00ff88 }
+        .sell { background:#ff444440; border:2px solid #ff4444 }
+    </style>
+</head>
+<body>
+    <h1>🚀 NIFTY Options MACD</h1>
+    <div class="grid" id="signals"></div>
+    <div>Last update: <span id="timestamp">--</span></div>
+
+<script>
+const ws = new WebSocket(
+    (location.protocol === "https:" ? "wss://" : "ws://") +
+    location.host + "/ws"
+);
+
+ws.onmessage = (event) => {
+    const d = JSON.parse(event.data);
+
+    document.getElementById("signals").innerHTML = `
+        <div class="card ${d.call_signal.toLowerCase()}">
+            <h2>📈 CALL ${d.call_strike}</h2>
+            <h1>${d.call_signal}</h1>
+            <div>MACD: ${d.call_macd.toFixed(2)}</div>
+        </div>
+
+        <div class="card ${d.put_signal.toLowerCase()}">
+            <h2>📉 PUT ${d.put_strike}</h2>
+            <h1>${d.put_signal}</h1>
+            <div>MACD: ${d.put_macd.toFixed(2)}</div>
+        </div>
+    `;
+
+    document.getElementById("timestamp").innerText = d.timestamp;
+};
+</script>
+</body>
+</html>
 
