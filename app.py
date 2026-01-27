@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Rectangle
 from datetime import datetime, timedelta
 import calendar
 import os
@@ -12,7 +11,6 @@ from breeze_connect import BreezeConnect
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="NIFTY Live MACD", layout="wide")
 
-# --- CUSTOM CSS FOR DARK THEME DASHBOARD ---
 st.markdown("""
     <style>
     .main { background-color: #0e1117; color: white; }
@@ -22,9 +20,16 @@ st.markdown("""
 
 # --- SIDEBAR: AUTHENTICATION ---
 st.sidebar.header("🔐 Authentication")
+# It's better to set these in Render Environment Variables
 api_key = st.sidebar.text_input("API Key", value=os.getenv("BREEZE_API_KEY", "3194b6xL482162_16NkJ368y350336i&"))
 api_secret = st.sidebar.text_input("API Secret", type="password", value=os.getenv("BREEZE_API_SECRET", "(7@1q7426%p614#fk015~J9%4_$3v6Wh"))
-session_token = st.sidebar.text_input("Fresh Session Token", type="password", help="Get this from the ICICI Login URL daily")
+session_token = st.sidebar.text_input("Fresh Session Token", type="password")
+
+st.sidebar.divider()
+st.sidebar.header("⚙️ Settings")
+target_premium = st.sidebar.slider("Target Premium", 50, 500, 100)
+# Manual Expiry Override if the calculation fails
+manual_expiry = st.sidebar.text_input("Manual Expiry (Optional)", placeholder="YYYY-MM-DDT07:00:00.000Z")
 
 # --- UTILITY FUNCTIONS ---
 def get_next_month_expiry():
@@ -37,11 +42,12 @@ def get_next_month_expiry():
     expiry = datetime(year, month, last_day)
     while expiry.weekday() != 3:  # Thursday
         expiry -= timedelta(days=1)
+    # Returns (Display Format, API Format)
     return expiry.strftime("%d-%b-%Y"), expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
 def calculate_macd(df):
-    if len(df) < 26: return None, None, None
-    close_prices = pd.to_numeric(df['close']).dropna()
+    if df is None or len(df) < 26: return None, None, None
+    close_prices = pd.to_numeric(df['close'], errors='coerce').dropna()
     ema12 = close_prices.ewm(span=12, adjust=False).mean()
     ema26 = close_prices.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
@@ -50,115 +56,106 @@ def calculate_macd(df):
     return macd_line, signal_line, hist
 
 def resample_to_15min(df_5min):
-    if df_5min.empty: return pd.DataFrame()
+    if df_5min is None or df_5min.empty: return pd.DataFrame()
     df = df_5min.copy()
     for col in ['open', 'high', 'low', 'close']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df = df.dropna(subset=['close'])
     return df.resample('15min').agg({'open':'first', 'high':'max', 'low':'min', 'close':'last'}).dropna()
 
-# --- MAIN LOGIC ---
+# --- APP EXECUTION ---
 if session_token:
     try:
-        # Initialize Breeze
+        # 1. Connect
         breeze = BreezeConnect(api_key=api_key)
         breeze.generate_session(api_secret=api_secret, session_token=session_token)
         
-        st.sidebar.success("✅ Connected to Breeze")
+        # 2. Get Expiry & Spot
+        calc_expiry_str, calc_expiry_iso = get_next_month_expiry()
+        expiry_iso = manual_expiry if manual_expiry else calc_expiry_iso
         
-        # 1. Setup Parameters
-        expiry_str, expiry_iso = get_next_month_expiry()
-        target_premium = st.sidebar.slider("Target Premium", 50, 500, 100)
-        
-        # 2. Fetch Spot & Strikes
         spot = breeze.get_quotes(stock_code="NIFTY", exchange_code="NSE")
+        if not spot.get("Success"):
+            st.error("Could not fetch NIFTY Spot. Check API Connection.")
+            st.stop()
+            
         spot_price = float(spot['Success'][0]['ltp'])
         atm = round(spot_price / 100) * 100
         
-        st.header(f"📊 NIFTY Spot: {spot_price} (ATM: {atm})")
+        st.sidebar.success(f"Connected! Spot: {spot_price}")
         
-        # 3. Data Fetching Container
-        with st.spinner("Fetching Historical Data..."):
-            to_date = datetime.now()
-            from_date = to_date - timedelta(days=7)
+        # 3. Data Fetching
+        with st.spinner(f"Fetching data for {expiry_iso}..."):
+            # Set time window (Handling weekends by looking back 10 days)
+            to_dt = datetime.now()
+            from_dt = to_dt - timedelta(days=10)
             
-            # For deployment simplicity, we use fixed offsets for demonstration
-            # You can re-implement the 'Scan' loop here if needed
-            call_strike = atm + 200
-            put_strike = atm - 200
-
             def get_data(strike, right):
                 res = breeze.get_historical_data(
                     interval="5minute",
-                    from_date=from_date.strftime("%Y-%m-%dT09:15:00.000Z"),
-                    to_date=to_date.strftime("%Y-%m-%dT15:30:00.000Z"),
+                    from_date=from_dt.strftime("%Y-%m-%dT09:15:00.000Z"),
+                    to_date=to_dt.strftime("%Y-%m-%dT15:30:00.000Z"),
                     stock_code="NIFTY", exchange_code="NFO", product_type="options",
                     expiry_date=expiry_iso, right=right, strike_price=str(strike)
                 )
-                if res.get("Success"):
+                if res and res.get("Success"):
                     df = pd.DataFrame(res["Success"])
-                    df["datetime"] = pd.to_datetime(df["datetime"])
-                    return df.set_index("datetime")
+                    if not df.empty:
+                        df["datetime"] = pd.to_datetime(df["datetime"])
+                        return df.set_index("datetime")
                 return pd.DataFrame()
 
-            df_call_5 = get_data(call_strike, "Call")
-            df_put_5 = get_data(put_strike, "Put")
+            # For now, using ATM +/- 200 for stability
+            df_call_5 = get_data(atm + 200, "Call")
+            df_put_5 = get_data(atm - 200, "Put")
 
-        # 4. Plotting
+        # 4. Display Results
         if not df_call_5.empty and not df_put_5.empty:
             df_c15 = resample_to_15min(df_call_5)
             df_p15 = resample_to_15min(df_put_5)
 
+            st.header(f"🚀 NIFTY Dashboard (ATM: {atm})")
+            
             fig, axes = plt.subplots(2, 2, figsize=(16, 10), facecolor='#0e1117')
             plt.subplots_adjust(hspace=0.4)
 
-            # --- CALL CHART (Top Left) ---
-            ax1, ax2 = axes[0,0], axes[0,1]
-            ax1.plot(df_c15.index, df_c15['close'], color='#00ff88', label='CE Price')
-            ax1.set_title(f"Call {call_strike} CE", color='white')
+            # --- PLOTTING LOGIC ---
+            # Call Price & MACD
+            m_c, s_c, h_c = calculate_macd(df_c15)
+            axes[0,0].plot(df_c15.index, df_c15['close'], color='#00ff88')
+            axes[0,0].set_title(f"Call {atm+200} CE Price", color='white')
             
-            # --- CALL MACD (Top Right) ---
-            m, s, h = calculate_macd(df_c15)
-            if m is not None:
-                ax2.plot(m.index, m, label='MACD', color='#00ff88')
-                ax2.plot(s.index, s, label='Signal', color='orange')
-                ax2.bar(h.index, h, color=['green' if val > 0 else 'red' for val in h], alpha=0.3)
-                ax2.axhline(0, color='white', lw=0.5)
-                sig = "🟢 BUY" if m.iloc[-1] > 0 else "🔴 SELL"
-                ax2.set_title(f"Call MACD: {sig}", color='white')
+            if m_c is not None:
+                axes[0,1].plot(m_c.index, m_c, color='#00ff88', label='MACD')
+                axes[0,1].plot(s_c.index, s_c, color='orange', label='Signal')
+                axes[0,1].bar(h_c.index, h_c, color=['green' if x > 0 else 'red' for x in h_c], alpha=0.3)
+                axes[0,1].set_title("Call MACD", color='white')
 
-            # --- PUT CHART (Bottom Left) ---
-            ax3, ax4 = axes[1,0], axes[1,1]
-            ax3.plot(df_p15.index, df_p15['close'], color='#ff4444', label='PE Price')
-            ax3.set_title(f"Put {put_strike} PE", color='white')
+            # Put Price & MACD
+            m_p, s_p, h_p = calculate_macd(df_p15)
+            axes[1,0].plot(df_p15.index, df_p15['close'], color='#ff4444')
+            axes[1,0].set_title(f"Put {atm-200} PE Price", color='white')
 
-            # --- PUT MACD (Bottom Right) ---
-            m, s, h = calculate_macd(df_p15)
-            if m is not None:
-                ax4.plot(m.index, m, label='MACD', color='#ff4444')
-                ax4.plot(s.index, s, label='Signal', color='orange')
-                ax4.bar(h.index, h, color=['green' if val > 0 else 'red' for val in h], alpha=0.3)
-                ax4.axhline(0, color='white', lw=0.5)
-                sig = "🟢 BUY" if m.iloc[-1] > 0 else "🔴 SELL"
-                ax4.set_title(f"Put MACD: {sig}", color='white')
+            if m_p is not None:
+                axes[1,1].plot(m_p.index, m_p, color='#ff4444', label='MACD')
+                axes[1,1].plot(s_p.index, s_p, color='orange', label='Signal')
+                axes[1,1].bar(h_p.index, h_p, color=['green' if x > 0 else 'red' for x in h_p], alpha=0.3)
+                axes[1,1].set_title("Put MACD", color='white')
 
             for ax in axes.flat:
                 ax.set_facecolor('#1e2129')
                 ax.tick_params(colors='white')
                 ax.grid(alpha=0.1)
-
-            st.pyplot(fig)
             
-            # Auto-refresh logic
-            time.sleep(1)
-            if st.button("Manual Refresh"):
-                st.rerun()
+            st.pyplot(fig)
         else:
-            st.error("No historical data found. Are the strikes/expiry correct?")
+            st.warning(f"No data found for Expiry: {expiry_iso}")
+            st.info("If today is a weekend or market is closed, the API might return empty results.")
+            
+            with st.expander("🔍 Debug API Response"):
+                st.write("Call API Test Response:", get_data(atm + 200, "Call"))
 
     except Exception as e:
-        st.error(f"Error: {e}")
-        st.info("Check if your Session Token is fresh (consumed tokens don't work).")
-
+        st.error(f"Handshake Error: {e}")
 else:
-    st.info("👋 Welcome! Please enter a **Fresh Session Token** in the sidebar to start the live dashboard.")
+    st.info("Please enter your **Session Token** in the sidebar to begin.")
