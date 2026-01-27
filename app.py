@@ -6,9 +6,15 @@ from datetime import datetime, timedelta
 import calendar
 import os
 from breeze_connect import BreezeConnect
+# NEW: Import for auto-refresh
+from streamlit_autorefresh import st_autorefresh
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="NIFTY Zero-Cross Strategy", layout="wide")
+st.set_page_config(page_title="NIFTY Live Zero-Cross", layout="wide")
+
+# --- AUTO-REFRESH EVERY 5 MINUTES ---
+# 300,000 ms = 5 minutes
+count = st_autorefresh(interval=300000, key="fivedash")
 
 # --- UTILITY: NEXT MONTHLY EXPIRY ---
 def get_next_monthly_expiry():
@@ -20,7 +26,7 @@ def get_next_monthly_expiry():
     
     last_day_num = calendar.monthrange(next_month_date.year, next_month_date.month)[1]
     expiry = datetime(next_month_date.year, next_month_date.month, last_day_num)
-    while expiry.weekday() != 1: # Last Tuesday
+    while expiry.weekday() != 1: 
         expiry -= timedelta(days=1)
     return expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
@@ -35,8 +41,6 @@ def get_macd_and_signals(df):
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     hist = macd_line - signal_line
     
-    # Buy/Sell Condition (Zero Cross)
-    # Current value vs Previous value
     current_macd = macd_line.iloc[-1]
     prev_macd = macd_line.iloc[-2]
     
@@ -84,7 +88,7 @@ if session_token:
                 return str(best['strike_price']), best['ltp']
             return None, None
 
-        with st.spinner("Analyzing Next Month's Chain..."):
+        with st.spinner("Updating Live Data..."):
             c_s, c_ltp = find_strike("call")
             p_s, p_ltp = find_strike("put")
 
@@ -103,21 +107,25 @@ if session_token:
             df_c = fetch(c_s, "call")
             df_p = fetch(p_s, "put")
 
-            # GET DATA & SIGNALS
             m_c, s_c, h_c, stat_c = get_macd_and_signals(df_c)
             m_p, s_p, h_p, stat_p = get_macd_and_signals(df_p)
 
-            # --- STATUS DASHBOARD ---
-            st.title("🚦 Option Signal Status")
+            # Dashboard Header
+            st.title("🚦 NIFTY Zero-Cross Dashboard")
+            st.caption(f"Last Updated: {datetime.now().strftime('%H:%M:%S')} (Auto-refreshes every 5m)")
+            
             col1, col2 = st.columns(2)
             
             def show_indicator(col, title, strike, ltp, status):
-                color = "green" if "BUY" in status else "red" if "SELL" in status else "gray"
+                # Color logic: Green for buy, Red for sell, dark for hold
+                bg_color = "#006400" if status == "BUY" else "#8B0000" if status == "SELL" else \
+                           "#1E1E1E" if "HOLD" in status else "#333"
+                
                 col.markdown(f"""
-                    <div style="background-color:{color}; padding:20px; border-radius:10px; text-align:center;">
-                        <h2 style="color:white; margin:0;">{title} {strike}</h2>
-                        <h1 style="color:white; margin:10px 0;">{status}</h1>
-                        <p style="color:white; margin:0;">Current Price: ₹{ltp}</p>
+                    <div style="background-color:{bg_color}; padding:20px; border-radius:10px; text-align:center; border: 1px solid #444;">
+                        <h3 style="color:white; margin:0;">{title} {strike}</h3>
+                        <h1 style="color:white; margin:10px 0; font-size: 3rem;">{status}</h1>
+                        <p style="color:#aaa; margin:0;">Current Price: ₹{ltp}</p>
                     </div>
                 """, unsafe_allow_html=True)
 
@@ -130,19 +138,20 @@ if session_token:
             
             def plot_signals(ax, df, m, s, h, title, line_color):
                 if m is not None:
-                    ax.axhline(0, color='white', linewidth=0.8, linestyle='-') # Zero Line
-                    ax.plot(df.index, m, color=line_color, label='MACD', linewidth=2)
+                    ax.axhline(0, color='white', linewidth=1.5, linestyle='-')
+                    ax.plot(df.index, m, color=line_color, label='MACD', linewidth=2.5)
                     ax.plot(df.index, s, color='orange', label='Signal', linestyle='--', alpha=0.6)
                     ax.bar(df.index, h, color=['#00ff88' if x > 0 else '#ff4444' for x in h], alpha=0.3)
-                    ax.set_title(f"{title} MACD", loc='left')
+                    ax.set_title(f"{title} MACD", loc='left', fontsize=12)
                     ax.legend(loc='upper left')
                     ax.grid(alpha=0.1)
 
             plot_signals(ax1, df_c, m_c, s_c, h_c, f"CALL {c_s}", "#00ff88")
             plot_signals(ax2, df_p, m_p, s_p, h_p, f"PUT {p_s}", "#ff4444")
             
+            plt.tight_layout()
             st.pyplot(fig)
     except Exception as e:
         st.error(f"Error: {e}")
 else:
-    st.info("Input Session Token to scan next-month options.")
+    st.info("Input Session Token to enable 5-minute auto-refresh scanning.")
