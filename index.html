@@ -12,9 +12,11 @@
     </style>
 </head>
 <body>
-    <h1>🚀 NIFTY Options MACD</h1>
-    <div class="grid" id="signals"></div>
-    <div>Last update: <span id="timestamp">--</span></div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<canvas id="callChart"></canvas>
+<canvas id="putChart"></canvas>
+
 
 <script>
 const ws = new WebSocket(
