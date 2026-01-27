@@ -1,16 +1,18 @@
-import os, json, asyncio
-from datetime import datetime
+import os
+import json
+import asyncio
+from datetime import datetime, timedelta
+
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 from breeze_connect import BreezeConnect
 
-app = FastAPI()
+app = FastAPI(title="NIFTY Options Dashboard")
+
 breeze = None
 
 
-# -------------------------------
-# Breeze lazy init (Render-safe)
-# -------------------------------
+# ---------- Breeze Init ----------
 async def get_breeze():
     global breeze
     if breeze is None:
@@ -19,12 +21,29 @@ async def get_breeze():
             api_secret=os.getenv("BREEZE_API_SECRET"),
             session_token=os.getenv("BREEZE_SESSION")
         )
+        print("✅ Breeze connected")
     return breeze
 
 
-# -------------------------------
-# Routes
-# -------------------------------
+# ---------- Helpers ----------
+def round_to_atm(price: float) -> int:
+    return round(price / 50) * 50
+
+
+def to_candles(data):
+    candles = []
+    for d in data:
+        candles.append({
+            "time": int(datetime.fromisoformat(d["datetime"]).timestamp()),
+            "open": float(d["open"]),
+            "high": float(d["high"]),
+            "low": float(d["low"]),
+            "close": float(d["close"])
+        })
+    return candles
+
+
+# ---------- Routes ----------
 @app.get("/")
 async def dashboard():
     return HTMLResponse(open("index.html").read())
@@ -35,36 +54,63 @@ async def health():
     return {"status": "ok"}
 
 
-# -------------------------------
-# WebSocket (charts + signals)
-# -------------------------------
+# ---------- WebSocket ----------
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
 
     while True:
         try:
-            await get_breeze()
+            b = await get_breeze()
 
-            # 🔁 TEMP MOCK DATA (replace later with Breeze + MACD)
-            labels = ["10:00", "10:15", "10:30", "10:45", "11:00"]
+            # 1️⃣ Get NIFTY LTP
+            q = b.get_quotes(
+                stock_code="NIFTY",
+                exchange_code="NSE",
+                product_type="cash"
+            )["Success"][0]
+
+            ltp = float(q["ltp"])
+            atm = round_to_atm(ltp)
+
+            # 2️⃣ Time window (15 days)
+            end = datetime.now()
+            start = end - timedelta(days=15)
+
+            # 3️⃣ CALL data
+            call_raw = b.get_historical_data_v2(
+                interval="15minute",
+                from_date=start.strftime("%Y-%m-%dT09:15:00.000Z"),
+                to_date=end.strftime("%Y-%m-%dT15:30:00.000Z"),
+                stock_code="NIFTY",
+                exchange_code="NSE",
+                product_type="options",
+                right="call",
+                strike_price=atm
+            )["Success"]
+
+            # 4️⃣ PUT data
+            put_raw = b.get_historical_data_v2(
+                interval="15minute",
+                from_date=start.strftime("%Y-%m-%dT09:15:00.000Z"),
+                to_date=end.strftime("%Y-%m-%dT15:30:00.000Z"),
+                stock_code="NIFTY",
+                exchange_code="NSE",
+                product_type="options",
+                right="put",
+                strike_price=atm
+            )["Success"]
 
             payload = {
                 "call": {
-                    "strike": 26100,
-                    "signal": "BUY",
-                    "price": [102, 106, 111, 115, 118],
-                    "macd":  [0.4, 0.7, 1.0, 1.2, 1.35],
-                    "labels": labels
+                    "strike": atm,
+                    "candles": to_candles(call_raw)
                 },
                 "put": {
-                    "strike": 24100,
-                    "signal": "SELL",
-                    "price": [98, 94, 90, 86, 82],
-                    "macd":  [-0.3, -0.6, -0.9, -1.1, -1.3],
-                    "labels": labels
+                    "strike": atm,
+                    "candles": to_candles(put_raw)
                 },
-                "timestamp": datetime.now().strftime("%d %b %H:%M:%S")
+                "timestamp": datetime.now().strftime("%H:%M:%S")
             }
 
             await ws.send_text(json.dumps(payload))
@@ -72,4 +118,11 @@ async def ws_endpoint(ws: WebSocket):
         except Exception as e:
             await ws.send_text(json.dumps({"error": str(e)}))
 
-        await asyncio.sleep(300)  # 5 min refresh
+        # Update every 5 minutes
+        await asyncio.sleep(300)
+
+
+# ---------- Local run ----------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
