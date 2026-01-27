@@ -8,48 +8,29 @@ import os
 from breeze_connect import BreezeConnect
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="NIFTY Monthly ₹100 Strategy", layout="wide")
+st.set_page_config(page_title="NIFTY ₹100 Scanner", layout="wide")
 
-st.markdown("""
-    <style>
-    .main { background-color: #0e1117; color: white; }
-    div.stButton > button:first-child { background-color: #00ff88; color: black; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- SIDEBAR: AUTHENTICATION & SETTINGS ---
-st.sidebar.header("🔐 Authentication")
-api_key = st.sidebar.text_input("API Key", value=os.getenv("BREEZE_API_KEY", "3194b6xL482162_16NkJ368y350336i&"))
-api_secret = st.sidebar.text_input("API Secret", type="password", value=os.getenv("BREEZE_API_SECRET", "(7@1q7426%p614#fk015~J9%4_$3v6Wh"))
-session_token = st.sidebar.text_input("Fresh Session Token", type="password")
-
-st.sidebar.divider()
-st.sidebar.header("⚙️ Target Range")
-# Restricting input range between 80 and 120 as requested
-target_price = st.sidebar.number_input("Target Premium (₹)", min_value=80, max_value=120, value=100, step=1)
-
-# --- UTILITY FUNCTIONS ---
+# --- UTILITY: MONTHLY EXPIRY (LAST TUESDAY) ---
 def get_last_tuesday(date_obj):
-    """Finds the last Tuesday of the month."""
     last_day = calendar.monthrange(date_obj.year, date_obj.month)[1]
     expiry = datetime(date_obj.year, date_obj.month, last_day)
-    while expiry.weekday() != 1: # 1 is Tuesday
+    while expiry.weekday() != 1: # 1 = Tuesday
         expiry -= timedelta(days=1)
     return expiry
 
 def get_monthly_expiry():
-    """Calculates the current or next monthly expiry (Last Tuesday)."""
     today = datetime.today()
     expiry = get_last_tuesday(today)
+    # If today is past the last Tuesday, get next month's
     if today.date() > expiry.date():
-        # Move to next month if current monthly has passed
         next_month = (today.replace(day=28) + timedelta(days=7))
         expiry = get_last_tuesday(next_month)
     return expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
+# --- DATA PROCESSING ---
 def calculate_macd(df):
-    if df is None or len(df) < 26: return None, None, None
-    close = pd.to_numeric(df['close'], errors='coerce').dropna()
+    if df.empty or len(df) < 26: return None, None, None
+    close = pd.to_numeric(df['close']).dropna()
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
@@ -57,98 +38,90 @@ def calculate_macd(df):
     hist = macd_line - signal_line
     return macd_line, signal_line, hist
 
-def process_data(df_raw):
+def process_for_plotting(df_raw):
     if df_raw.empty: return pd.DataFrame()
     df = df_raw.copy()
     df['datetime'] = pd.to_datetime(df['datetime'])
-    df = df.set_index('datetime')
-    for col in ['open', 'high', 'low', 'close']:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # Resample to 15min and use integer indexing (1, 2, 3...)
-    resampled = df.resample('15min').agg({'open':'first', 'high':'max', 'low':'min', 'close':'last'}).dropna()
-    resampled = resampled.reset_index(drop=True)
-    resampled.index += 1
-    return resampled
+    df = df.set_index('datetime').resample('15min').agg({'open':'first', 'high':'max', 'low':'min', 'close':'last'}).dropna()
+    df = df.reset_index(drop=True)
+    df.index += 1 # Candle 1, 2, 3...
+    return df
 
-# --- MAIN APP LOGIC ---
+# --- MAIN APP ---
+st.sidebar.header("🔐 Breeze Login")
+api_key = st.sidebar.text_input("API Key", value="3194b6xL482162_16NkJ368y350336i&")
+api_secret = st.sidebar.text_input("API Secret", type="password", value="(7@1q7426%p614#fk015~J9%4_$3v6Wh")
+session_token = st.sidebar.text_input("Session Token", type="password")
+
 if session_token:
     try:
         breeze = BreezeConnect(api_key=api_key)
         breeze.generate_session(api_secret=api_secret, session_token=session_token)
         expiry_iso = get_monthly_expiry()
         
-        # 1. Get Nifty Spot
-        spot = breeze.get_quotes(stock_code="NIFTY", exchange_code="NSE")
-        spot_price = float(spot['Success'][0]['ltp'])
-        atm = round(spot_price / 100) * 100
-        
-        # 2. Scanner for Strikes within 80-120 range
-        def find_best_strike(right):
-            # Check 15 strikes around ATM to find premium closest to target
-            strikes = [atm + (i * 50) for i in range(-15, 16)]
-            best_s, min_diff = atm, float('inf')
+        st.info(f"Scanning for ₹100 options for Expiry: {expiry_iso[:10]}")
+
+        # 1. SCAN OPTION CHAIN FOR ₹100 PREMIUM
+        def find_strike_by_price(right):
+            # Fetch entire chain for this expiry
+            chain = breeze.get_option_chain_quotes(stock_code="NIFTY", exchange_code="NFO", 
+                                                   product_type="options", expiry_date=expiry_iso, right=right)
+            if chain.get("Success"):
+                df_chain = pd.DataFrame(chain["Success"])
+                df_chain['ltp'] = pd.to_numeric(df_chain['ltp'])
+                # Find strike where ltp is closest to 100
+                df_chain['diff'] = abs(df_chain['ltp'] - 100)
+                best_match = df_chain.sort_values('diff').iloc[0]
+                return str(best_match['strike_price']), best_match['ltp']
+            return None, None
+
+        call_strike, call_ltp = find_strike_by_price("call")
+        put_strike, put_ltp = find_strike_by_price("put")
+
+        if call_strike and put_strike:
+            st.success(f"Selected Call: {call_strike} (LTP: ₹{call_ltp}) | Selected Put: {put_strike} (LTP: ₹{put_ltp})")
+
+            # 2. FETCH HISTORICAL DATA
+            to_date = datetime.now()
+            from_date = to_date - timedelta(days=10)
+
+            def get_hist(s, r):
+                res = breeze.get_historical_data(interval="5minute", 
+                    from_date=from_date.strftime("%Y-%m-%dT09:15:00.000Z"),
+                    to_date=to_date.strftime("%Y-%m-%dT15:30:00.000Z"),
+                    stock_code="NIFTY", exchange_code="NFO", product_type="options",
+                    expiry_date=expiry_iso, right=r, strike_price=s)
+                return process_for_plotting(pd.DataFrame(res["Success"])) if res.get("Success") else pd.DataFrame()
+
+            df_c = get_hist(call_strike, "call")
+            df_p = get_hist(put_strike, "put")
+
+            # 3. PLOTTING
+            plt.style.use('dark_background')
+            fig, axes = plt.subplots(2, 2, figsize=(15, 10), facecolor='#0e1117')
             
-            for s in strikes:
-                q = breeze.get_quotes(stock_code="NIFTY", exchange_code="NFO", 
-                                      expiry_date=expiry_iso, right=right, strike_price=str(s))
-                if q.get("Success"):
-                    ltp = float(q["Success"][0]["ltp"])
-                    # Enforce the 80-120 range strictly
-                    if 80 <= ltp <= 120:
-                        diff = abs(ltp - target_price)
-                        if diff < min_diff:
-                            min_diff = diff
-                            best_s = s
-            return best_s
+            for i, (df, title, color) in enumerate([(df_c, f"Call {call_strike}", "#00ff88"), (df_p, f"Put {put_strike}", "#ff4444")]):
+                m, s, h = calculate_macd(df)
+                # Price Plot
+                axes[i,0].plot(df.index, df['close'], color=color, linewidth=2)
+                axes[i,0].set_title(f"{title} Price (15m)", color='white')
+                # MACD Plot
+                if m is not None:
+                    axes[i,1].plot(df.index, m, color=color, label='MACD')
+                    axes[i,1].plot(df.index, s, color='orange', label='Signal')
+                    axes[i,1].bar(df.index, h, color=['green' if x > 0 else 'red' for x in h], alpha=0.3)
+                    axes[i,1].set_title(f"{title} MACD", color='white')
 
-        with st.spinner(f"Scanning ₹80-₹120 monthly strikes..."):
-            call_strike = find_best_strike("Call")
-            put_strike = find_best_strike("Put")
-
-        # 3. Fetch & Plot
-        to_date = datetime.now()
-        from_date = to_date - timedelta(days=8)
-        
-        def get_hist(s, r):
-            res = breeze.get_historical_data(interval="5minute", 
-                from_date=from_date.strftime("%Y-%m-%dT09:15:00.000Z"),
-                to_date=to_date.strftime("%Y-%m-%dT15:30:00.000Z"),
-                stock_code="NIFTY", exchange_code="NFO", product_type="options",
-                expiry_date=expiry_iso, right=r, strike_price=str(s))
-            return pd.DataFrame(res["Success"]) if res.get("Success") else pd.DataFrame()
-
-        df_c = process_data(get_hist(call_strike, "Call"))
-        df_p = process_data(get_hist(put_strike, "Put"))
-
-        st.title(f"📈 NIFTY Monthly (Expiry: {expiry_iso[:10]})")
-        st.subheader(f"Selected: {call_strike} CE & {put_strike} PE")
-
-        plt.style.use('dark_background')
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10), facecolor='#0e1117')
-        
-        def plot_macd_view(df, row, color, title):
-            m, s, h = calculate_macd(df)
-            axes[row,0].plot(df.index, df['close'], color=color, linewidth=1.5)
-            axes[row,0].set_title(f"{title} Price", color='white')
-            if m is not None:
-                axes[row,1].plot(df.index, m, color=color, label='MACD')
-                axes[row,1].plot(df.index, s, color='orange', label='Signal')
-                axes[row,1].bar(df.index, h, color=['#00ff88' if x > 0 else '#ff4444' for x in h], alpha=0.3)
-                axes[row,1].set_title(f"{title} MACD", color='white')
-
-        plot_macd_view(df_c, 0, '#00ff88', f"Call {call_strike}")
-        plot_macd_view(df_p, 1, '#ff4444', f"Put {put_strike}")
-
-        for ax in axes.flat:
-            ax.set_xlabel("Candle Index")
-            ax.set_facecolor('#161a25')
-            ax.grid(color='#2d3446', alpha=0.3)
-            ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-
-        st.pyplot(fig)
+            for ax in axes.flat:
+                ax.set_facecolor('#161a25')
+                ax.set_xlabel("Candle Index")
+                ax.grid(alpha=0.2)
+            
+            st.pyplot(fig)
+        else:
+            st.error("Could not find suitable ₹100 strikes. Check if market is open or expiry is valid.")
 
     except Exception as e:
         st.error(f"Error: {e}")
 else:
-    st.info("Input a fresh Session Token in the sidebar to scan for monthly options.")
+    st.info("Please enter your Session Token to automatically find ₹100 options.")
