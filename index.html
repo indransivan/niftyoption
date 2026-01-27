@@ -2,85 +2,55 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NIFTY Options Dashboard</title>
+<title>NIFTY Options</title>
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 
 <style>
-body {
-    margin: 0;
-    font-family: sans-serif;
-    background: #0a0a0a;
-    color: white;
-    padding: 10px;
-}
-h2 { margin: 5px 0 }
-.chart {
-    height: 300px;
-    margin-bottom: 20px;
-}
-.footer {
-    text-align: center;
-    opacity: 0.7;
-}
+body { margin:0; background:#0a0a0a; color:white; font-family:sans-serif }
+.chart { height:300px; margin:10px }
 </style>
 </head>
 
 <body>
 
-<h2>📈 NIFTY CALL <span id="callStrike"></span></h2>
-<div id="callChart" class="chart"></div>
+<h3>📈 CALL <span id="callStrike"></span></h3>
+<div id="call" class="chart"></div>
 
-<h2>📉 NIFTY PUT <span id="putStrike"></span></h2>
-<div id="putChart" class="chart"></div>
+<h3>📉 PUT <span id="putStrike"></span></h3>
+<div id="put" class="chart"></div>
 
-<div class="footer">
-    Last update: <span id="timestamp">--</span>
+<div style="text-align:center;opacity:.6">
+Last update: <span id="time"></span>
 </div>
 
 <script>
 const ws = new WebSocket(
-    (location.protocol === "https:" ? "wss://" : "ws://") +
-    location.host + "/ws"
+  (location.protocol === "https:" ? "wss://" : "ws://") +
+  location.host + "/ws"
 );
 
-const chartOptions = {
-    layout: {
-        background: { color: '#0a0a0a' },
-        textColor: '#ffffff'
-    },
-    grid: {
-        vertLines: { color: '#222' },
-        horzLines: { color: '#222' }
-    },
-    timeScale: { timeVisible: true }
+const options = {
+  layout: { background:{color:"#0a0a0a"}, textColor:"#fff" },
+  grid: { vertLines:{color:"#222"}, horzLines:{color:"#222"} },
+  timeScale: { timeVisible:true }
 };
 
-const callChart = LightweightCharts.createChart(
-    document.getElementById('callChart'),
-    chartOptions
-);
-const putChart = LightweightCharts.createChart(
-    document.getElementById('putChart'),
-    chartOptions
-);
+const callChart = LightweightCharts.createChart(document.getElementById("call"), options);
+const putChart  = LightweightCharts.createChart(document.getElementById("put"), options);
 
 const callSeries = callChart.addCandlestickSeries();
-const putSeries = putChart.addCandlestickSeries();
+const putSeries  = putChart.addCandlestickSeries();
 
-ws.onmessage = (event) => {
-    const d = JSON.parse(event.data);
-    if (d.error) {
-        console.log(d.error);
-        return;
-    }
+ws.onmessage = e => {
+  const d = JSON.parse(e.data);
 
-    callSeries.setData(d.call.candles);
-    putSeries.setData(d.put.candles);
+  callSeries.setData(d.call.candles);
+  putSeries.setData(d.put.candles);
 
-    document.getElementById("callStrike").innerText = d.call.strike;
-    document.getElementById("putStrike").innerText = d.put.strike;
-    document.getElementById("timestamp").innerText = d.timestamp;
+  document.getElementById("callStrike").innerText = d.call.strike;
+  document.getElementById("putStrike").innerText  = d.put.strike;
+  document.getElementById("time").innerText = d.timestamp;
 };
 </script>
 
