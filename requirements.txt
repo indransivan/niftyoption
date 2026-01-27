@@ -3,3 +3,4 @@ breeze-connect
 pandas
 matplotlib
 streamlit-autorefresh
+requests
