@@ -4,6 +4,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NIFTY MACD Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.0.0/dist/chartjs-chart-financial.min.js"></script>
 <style>
 body { font-family: sans-serif; background:#0a0a0a; color:white; padding:15px }
 .grid { display:grid; grid-template-columns:1fr 1fr; gap:15px }
@@ -13,7 +14,6 @@ body { font-family: sans-serif; background:#0a0a0a; color:white; padding:15px }
 </style>
 </head>
 <body>
-
 <h1>🚀 NIFTY Options MACD Dashboard</h1>
 <div class="grid" id="signals"></div>
 <div>Last update: <span id="timestamp"></span></div>
@@ -22,6 +22,9 @@ body { font-family: sans-serif; background:#0a0a0a; color:white; padding:15px }
 <canvas id="putChart" height="300"></canvas>
 
 <script>
+const { Chart, registerables } = Chart;
+Chart.register(...registerables);
+
 let callChart, putChart;
 
 const ws = new WebSocket(
@@ -31,51 +34,70 @@ const ws = new WebSocket(
 ws.onmessage = (event) => {
     const d = JSON.parse(event.data);
 
-    // Update signals
+    if(d.error){
+        document.getElementById("signals").innerHTML = "<b>Error: "+d.error+"</b>";
+        return;
+    }
+
     document.getElementById("signals").innerHTML = `
-        <div class="card buy">
-            <h2>📈 CALL ${d.call.strike}</h2>
-            <h1>ATM</h1>
+        <div class="card ${d.call_signal.toLowerCase()}">
+            <h2>📈 CALL ${d.call_strike}</h2>
+            <h1>${d.call_signal}</h1>
+            <div>MACD: ${d.call_macd}</div>
         </div>
-        <div class="card sell">
-            <h2>📉 PUT ${d.put.strike}</h2>
-            <h1>ATM</h1>
+        <div class="card ${d.put_signal.toLowerCase()}">
+            <h2>📉 PUT ${d.put_strike}</h2>
+            <h1>${d.put_signal}</h1>
+            <div>MACD: ${d.put_macd}</div>
         </div>
     `;
     document.getElementById("timestamp").innerText = d.timestamp;
 
-    // Prepare candlestick data
-    const callData = d.call.candles.map(c => ({
-        x: new Date(c.time),
-        o: c.open, h: c.high, l: c.low, c: c.close
-    }));
-    const putData = d.put.candles.map(c => ({
-        x: new Date(c.time),
-        o: c.open, h: c.high, l: c.low, c: c.close
-    }));
+    const formatCandles = (candles) => candles
+        .filter(c => c.o && c.h && c.l && c.c)
+        .map(c => ({
+            x: new Date(c.time), // convert to Date object
+            o: parseFloat(c.open),
+            h: parseFloat(c.high),
+            l: parseFloat(c.low),
+            c: parseFloat(c.close)
+        }));
 
-    const chartOptions = {
-        type: 'candlestick',
-        data: { datasets: [{ label:'Candles', data: [] }] },
-        options: { plugins: { legend: { display:false } } }
-    };
+    const callData = formatCandles(d.call_candles);
+    const putData = formatCandles(d.put_candles);
 
-    if (!callChart) {
+    // Create or update call chart
+    if(!callChart){
         callChart = new Chart(document.getElementById('callChart'), {
-            type:'candlestick',
-            data: { datasets:[{ label:'CALL', data: callData }] },
-            options: { plugins:{ legend:{ display:false } } }
+            type: 'candlestick',
+            data: { datasets: [{ label:'CALL', data: callData }] },
+            options: {
+                plugins:{legend:{display:false}},
+                responsive:true,
+                scales:{
+                    x:{ type:'time', time:{ unit:'hour' } },
+                    y:{ position:'right' }
+                }
+            }
         });
     } else {
         callChart.data.datasets[0].data = callData;
         callChart.update();
     }
 
-    if (!putChart) {
+    // Create or update put chart
+    if(!putChart){
         putChart = new Chart(document.getElementById('putChart'), {
-            type:'candlestick',
-            data: { datasets:[{ label:'PUT', data: putData }] },
-            options: { plugins:{ legend:{ display:false } } }
+            type: 'candlestick',
+            data: { datasets: [{ label:'PUT', data: putData }] },
+            options: {
+                plugins:{legend:{display:false}},
+                responsive:true,
+                scales:{
+                    x:{ type:'time', time:{ unit:'hour' } },
+                    y:{ position:'right' }
+                }
+            }
         });
     } else {
         putChart.data.datasets[0].data = putData;
@@ -83,6 +105,5 @@ ws.onmessage = (event) => {
     }
 };
 </script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.0.0/dist/chartjs-chart-financial.min.js"></script>
 </body>
 </html>
