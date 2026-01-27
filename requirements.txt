@@ -1,5 +1,5 @@
+streamlit
 breeze-connect
 pandas
 matplotlib
-numpy
-streamlit
+streamlit-autorefresh
