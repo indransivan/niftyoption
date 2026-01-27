@@ -1,108 +1,59 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="UTF-8">
 <title>NIFTY MACD Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.0.0/dist/chartjs-chart-financial.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.0/dist/chartjs-chart-financial.min.js"></script>
 <style>
-body { font-family: sans-serif; background:#0a0a0a; color:white; padding:15px }
-.grid { display:grid; grid-template-columns:1fr 1fr; gap:15px }
-.card { padding:20px; border-radius:12px; text-align:center; }
-.buy { background:#00ff8840; border:2px solid #00ff88; }
-.sell { background:#ff444440; border:2px solid #ff4444; }
+body { font-family: sans-serif; background:#111; color:white; margin:20px }
+canvas { background:#000; margin-bottom:40px; border-radius:10px; }
+.signal { font-size:18px; font-weight:bold; margin:5px; }
+.buy { color:#00ff88; }
+.sell { color:#ff4444; }
+.hold { color:#ffaa00; }
 </style>
 </head>
 <body>
 <h1>🚀 NIFTY Options MACD Dashboard</h1>
-<div class="grid" id="signals"></div>
-<div>Last update: <span id="timestamp"></span></div>
+<div>Last update: <span id="timestamp">--:--</span></div>
+<div class="signal">CALL: <span id="call_signal">--</span></div>
+<div class="signal">PUT: <span id="put_signal">--</span></div>
 
-<canvas id="callChart" height="300"></canvas>
-<canvas id="putChart" height="300"></canvas>
+<canvas id="callChart" width="800" height="400"></canvas>
+<canvas id="putChart" width="800" height="400"></canvas>
 
 <script>
-const { Chart, registerables } = Chart;
-Chart.register(...registerables);
+const callCtx = document.getElementById('callChart').getContext('2d');
+const putCtx = document.getElementById('putChart').getContext('2d');
 
-let callChart, putChart;
+let callChart = new Chart(callCtx, {
+    type: 'candlestick',
+    data: { datasets: [{ label: 'CALL', data: [] }] },
+    options: { plugins: { legend:{display:true} }, scales: { x:{type:'time'}, y:{beginAtZero:false} } }
+});
 
-const ws = new WebSocket(
-    (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws"
-);
+let putChart = new Chart(putCtx, {
+    type: 'candlestick',
+    data: { datasets: [{ label: 'PUT', data: [] }] },
+    options: { plugins: { legend:{display:true} }, scales: { x:{type:'time'}, y:{beginAtZero:false} } }
+});
+
+const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
 
 ws.onmessage = (event) => {
-    const d = JSON.parse(event.data);
+    const data = JSON.parse(event.data);
 
-    if(d.error){
-        document.getElementById("signals").innerHTML = "<b>Error: "+d.error+"</b>";
+    if(data.error) {
+        console.error(data.error);
         return;
     }
 
-    document.getElementById("signals").innerHTML = `
-        <div class="card ${d.call_signal.toLowerCase()}">
-            <h2>📈 CALL ${d.call_strike}</h2>
-            <h1>${d.call_signal}</h1>
-            <div>MACD: ${d.call_macd}</div>
-        </div>
-        <div class="card ${d.put_signal.toLowerCase()}">
-            <h2>📉 PUT ${d.put_strike}</h2>
-            <h1>${d.put_signal}</h1>
-            <div>MACD: ${d.put_macd}</div>
-        </div>
-    `;
-    document.getElementById("timestamp").innerText = d.timestamp;
+    document.getElementById('timestamp').innerText = data.timestamp;
+    document.getElementById('call_signal').innerText = data.call_signal;
+    document.getElementById('put_signal').innerText = data.put_signal;
 
-    const formatCandles = (candles) => candles
-        .filter(c => c.o && c.h && c.l && c.c)
-        .map(c => ({
-            x: new Date(c.time), // convert to Date object
-            o: parseFloat(c.open),
-            h: parseFloat(c.high),
-            l: parseFloat(c.low),
-            c: parseFloat(c.close)
-        }));
-
-    const callData = formatCandles(d.call_candles);
-    const putData = formatCandles(d.put_candles);
-
-    // Create or update call chart
-    if(!callChart){
-        callChart = new Chart(document.getElementById('callChart'), {
-            type: 'candlestick',
-            data: { datasets: [{ label:'CALL', data: callData }] },
-            options: {
-                plugins:{legend:{display:false}},
-                responsive:true,
-                scales:{
-                    x:{ type:'time', time:{ unit:'hour' } },
-                    y:{ position:'right' }
-                }
-            }
-        });
-    } else {
-        callChart.data.datasets[0].data = callData;
-        callChart.update();
-    }
-
-    // Create or update put chart
-    if(!putChart){
-        putChart = new Chart(document.getElementById('putChart'), {
-            type: 'candlestick',
-            data: { datasets: [{ label:'PUT', data: putData }] },
-            options: {
-                plugins:{legend:{display:false}},
-                responsive:true,
-                scales:{
-                    x:{ type:'time', time:{ unit:'hour' } },
-                    y:{ position:'right' }
-                }
-            }
-        });
-    } else {
-        putChart.data.datasets[0].data = putData;
-        putChart.update();
-    }
+    // NOTE: For simplicity, real candlestick data not streamed yet. Can add Breeze historical candles here
 };
 </script>
 </body>
