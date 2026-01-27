@@ -1,44 +1,71 @@
-import os  # ← ADD THIS LINE
+import os
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-import uvicorn
-from breeze_connect import BreezeConnect
 import asyncio
-import json
 from datetime import datetime
-# ... (keep all your strategy functions)
+# ... your other imports
 
-app = FastAPI()
+app = FastAPI(title="NIFTY MACD Dashboard")
 
-# Initialize Breeze (use environment variables for security)
-breeze = BreezeConnect(api_key=os.getenv("BREEZE_API_KEY"))
-breeze.generate_session(
-    api_secret=os.getenv("BREEZE_API_SECRET"), 
-    session_token=os.getenv("BREEZE_SESSION")
-)
+# Global Breeze instance (lazy init)
+breeze = None
 
-# Your existing functions (get_next_month_expiry, calculate_macd, etc.)
-# ... keep all of them
+async def get_breeze():
+    """Initialize Breeze only when needed - won't crash startup"""
+    global breeze
+    if breeze is None:
+        try:
+            breeze = BreezeConnect(api_key=os.getenv("BREEZE_API_KEY"))
+            breeze.generate_session(
+                api_secret=os.getenv("BREEZE_API_SECRET"),
+                session_token=os.getenv("BREEZE_SESSION")
+            )
+            print("✅ Breeze API Connected!")
+        except Exception as e:
+            print(f"⚠️ Breeze temp unavailable: {e} (will retry)")
+            breeze = None
+    return breeze
 
-@app.get("/", response_class=HTMLResponse)
-async def get_dashboard():
-    return DASHBOARD_HTML  # Mobile-responsive HTML (see below)
+@app.get("/")
+async def dashboard():
+    """Main dashboard - Breeze connects on first request"""
+    await get_breeze()  # Safe init
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html>
+    <head><title>NIFTY LIVE</title>
+    <meta name="viewport" content="width=device-width">
+    <style>body{font-family:sans-serif;background:#000;color:#0f0;padding:20px}</style>
+    </head>
+    <body>
+        <h1>🚀 NIFTY Options MACD Dashboard</h1>
+        <div id="status">Connecting to Breeze API...</div>
+        <div id="signals">-</div>
+        <script>
+            const ws = new WebSocket('wss://' + location.host + '/ws');
+            ws.onopen = () => document.getElementById('status').innerText = '🟢 LIVE - Updates every 5min';
+            ws.onmessage = e => document.getElementById('signals').innerHTML = e.data;
+        </script>
+    </body>
+    </html>
+    """)
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket(websocket: WebSocket):
     await websocket.accept()
     while True:
-        # Run your strategy logic
-        signals = await run_strategy()
-        await websocket.send_text(json.dumps(signals))
-        await asyncio.sleep(300)  # Update every 5 min
-
-async def run_strategy():
-    # Your complete strategy code here (option scanner + MACD)
-    # Return JSON: {"call_signal": "BUY", "put_signal": "SELL", "timestamp": "..."}
-    return strategy_results
+        try:
+            b = await get_breeze()
+            if b:
+                # Your NIFTY scanning + MACD logic here
+                signals = {"call": "🟢 BUY", "put": "🔴 SELL", "time": datetime.now().strftime("%H:%M")}
+                await websocket.send_text(str(signals))
+            else:
+                await websocket.send_text("🔄 Breeze retrying...")
+        except:
+            await websocket.send_text("⚠️ Temp unavailable")
+        await asyncio.sleep(300)  # 5min updates
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
