@@ -20,7 +20,7 @@ TELE_CHAT_ID = "8213681556"
 
 def send_telegram(msg):
     if "YOUR_BOT_TOKEN" in TELE_TOKEN: return # Skip if not configured
-    url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU/sendMessage"
     try:
         requests.post(url, data={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
     except Exception as e:
