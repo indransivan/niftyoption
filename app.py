@@ -8,8 +8,9 @@ from breeze_connect import BreezeConnect
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. SETTINGS & AUTO-REFRESH ---
-st.set_page_config(page_title="NIFTY aligned Strategy", layout="wide")
-st_autorefresh(interval=300000, key="fivedash")
+st.set_page_config(page_title="NIFTY ₹60 Round-Strike Strategy", layout="wide")
+# Auto-refresh every 5 minutes
+st_autorefresh(interval=300000, key="refresh_300")
 
 # --- 2. TELEGRAM CONFIGURATION ---
 TELE_TOKEN = "YOUR_BOT_TOKEN_HERE"
@@ -34,9 +35,10 @@ def get_next_monthly_expiry():
     return expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
 def calculate_macd_and_signal(df):
-    if df.empty or len(df) < 30: return None, None, None, "WAIT"
-    # Ensure we only use the last 200 rows for the calculation and display
-    df_limited = df.tail(200)
+    # Standardizing to 300 samples
+    if df.empty or len(df) < 300: return None, None, None, "WAIT"
+    
+    df_limited = df.tail(300)
     close = pd.to_numeric(df_limited['close']).dropna()
     
     ema12 = close.ewm(span=12, adjust=False).mean()
@@ -56,10 +58,9 @@ def process_data(df_raw):
     if df_raw.empty: return pd.DataFrame()
     df = df_raw.copy()
     df['datetime'] = pd.to_datetime(df['datetime'])
-    # Resampling to 15min as per your strategy
+    # Resampling to 15min candles
     df = df.set_index('datetime').resample('15min').agg({'close':'last'}).dropna()
     df = df.reset_index(drop=True)
-    # We return the full dataframe here and slice inside the plotting/MACD function
     return df
 
 def show_indicator(col, title, strike, ltp, status):
@@ -88,29 +89,37 @@ if session_token:
         breeze.generate_session(api_secret=api_secret, session_token=session_token)
         expiry_iso = get_next_monthly_expiry()
         
-        # We fetch extra days to ensure we have at least 200 samples after resampling
+        # Window for 300 samples (Approx 15 days)
         to_d = datetime.now()
         from_d = to_d - timedelta(days=15)
 
-        with st.spinner("Fetching Data..."):
+        with st.spinner("Scanning for ₹60 Round Strikes..."):
+            # A. Index Data
             idx_res = breeze.get_historical_data(interval="5minute", 
                 from_date=from_d.strftime("%Y-%m-%dT09:15:00.000Z"),
                 to_date=to_d.strftime("%Y-%m-%dT15:30:00.000Z"),
                 stock_code="NIFTY", exchange_code="NSE", product_type="cash")
             
-            def find_strike(right):
+            # B. Modified Option Chain Filter (Round 100 Strikes + ₹60 Target)
+            def find_round_strike(right):
                 res = breeze.get_option_chain_quotes(stock_code="NIFTY", exchange_code="NFO", 
                                                      product_type="options", expiry_date=expiry_iso, right=right)
                 if res.get("Success"):
                     df = pd.DataFrame(res["Success"])
+                    df['strike_price'] = pd.to_numeric(df['strike_price'])
                     df['ltp'] = pd.to_numeric(df['ltp'])
-                    df['diff'] = abs(df['ltp'] - 100)
+                    
+                    # FILTER: Keep only strikes that are multiples of 100
+                    df = df[df['strike_price'] % 100 == 0]
+                    
+                    # FIND: Strike where LTP is closest to 60
+                    df['diff'] = abs(df['ltp'] - 60)
                     best = df.sort_values('diff').iloc[0]
-                    return str(best['strike_price']), best['ltp']
+                    return str(int(best['strike_price'])), best['ltp']
                 return None, None
 
-            c_s, c_ltp = find_strike("call")
-            p_s, p_ltp = find_strike("put")
+            c_s, c_ltp = find_round_strike("call")
+            p_s, p_ltp = find_round_strike("put")
 
         if idx_res.get("Success") and c_s and p_s:
             def fetch_opt(s, r):
@@ -124,26 +133,26 @@ if session_token:
             df_idx = process_data(pd.DataFrame(idx_res["Success"]))
             df_ce, df_pe = fetch_opt(c_s, "call"), fetch_opt(p_s, "put")
 
-            # Calculate MACD on aligned 200-sample windows
+            # Calculate MACD Aligned
             m_idx, s_idx, h_idx, stat_idx = calculate_macd_and_signal(df_idx)
             m_ce, s_ce, h_ce, stat_ce = calculate_macd_and_signal(df_ce)
             m_pe, s_pe, h_pe, stat_pe = calculate_macd_and_signal(df_pe)
 
-            # Alerts
+            # Telegram
             time_str = datetime.now().strftime("%H:%M")
             if stat_idx in ["BUY", "SELL"] and stat_idx != st.session_state.last_signals["idx"]:
-                send_telegram(f"🏛 *INDEX*: {stat_idx} at {time_str}")
+                send_telegram(f"🏛 *INDEX*: {stat_idx} Trend detected at {time_str}")
                 st.session_state.last_signals["idx"] = stat_idx
             if stat_ce in ["BUY", "SELL"] and stat_ce != st.session_state.last_signals["ce"]:
-                send_telegram(f"🚀 *CALL {c_s}*: {stat_ce} at ₹{c_ltp}")
+                send_telegram(f"🚀 *CALL {c_s}*: {stat_ce} at ₹{c_ltp} ({time_str})")
                 st.session_state.last_signals["ce"] = stat_ce
             if stat_pe in ["BUY", "SELL"] and stat_pe != st.session_state.last_signals["pe"]:
-                send_telegram(f"📉 *PUT {p_s}*: {stat_pe} at ₹{p_ltp}")
+                send_telegram(f"📉 *PUT {p_s}*: {stat_pe} at ₹{p_ltp} ({time_str})")
                 st.session_state.last_signals["pe"] = stat_pe
 
             # --- VISUAL DASHBOARD ---
-            st.title("🏛 NIFTY Aligned Strategy Dashboard")
-            st.write(f"Live Update: {time_str} | Sample Window: 200 candles")
+            st.title("🏛 NIFTY Round-Strike Terminal (₹60 Premium)")
+            st.write(f"Live Update: {time_str} | Sample Window: 300 | Expiry: {expiry_iso[:10]}")
             
             row = st.columns(3)
             show_indicator(row[0], "NIFTY 50 INDEX", "SPOT", df_idx['close'].iloc[-1], stat_idx)
@@ -152,17 +161,16 @@ if session_token:
 
             # Aligned MACD Charts
             plt.style.use('dark_background')
-            # sharex=True ensures all charts move together and have the same X-axis scale
             fig, (ax0, ax1, ax2) = plt.subplots(3, 1, figsize=(14, 15), facecolor='#0e1117', sharex=True)
             
             def plot_macd_aligned(ax, m, s, h, title, color):
                 if m is not None:
-                    indices = range(len(m)) # Standardized X-axis (0 to 199)
+                    indices = range(len(m))
                     ax.axhline(0, color='white', linewidth=1, alpha=0.4)
                     ax.plot(indices, m, color=color, label='MACD', linewidth=2)
                     ax.plot(indices, s, color='orange', linestyle='--', alpha=0.5)
                     ax.bar(indices, h, color=['#00ff88' if x > 0 else '#ff4444' for x in h], alpha=0.3)
-                    ax.set_title(f"{title} MACD (Last 200 Samples)", loc='left', fontsize=12)
+                    ax.set_title(f"{title} MACD", loc='left', fontsize=12)
                     ax.set_facecolor('#161a25')
                     ax.grid(alpha=0.1)
 
@@ -170,11 +178,11 @@ if session_token:
             plot_macd_aligned(ax1, m_ce, s_ce, h_ce, f"CALL {c_s}", "#00ff88")
             plot_macd_aligned(ax2, m_pe, s_pe, h_pe, f"PUT {p_s}", "#ff4444")
             
-            plt.xlabel("Sample Count (Last 200 candles)")
+            plt.xlabel("Sample Count (Last 300 candles)")
             plt.tight_layout()
             st.pyplot(fig)
             
     except Exception as e:
         st.error(f"Error: {e}")
 else:
-    st.info("Input Session Token to start the aligned 200-sample scanner.")
+    st.info("Input Session Token to start the aligned 300-sample scanner.")
