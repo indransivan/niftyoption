@@ -17,10 +17,10 @@ TELE_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELE_CHAT_ID = "YOUR_CHAT_ID_HERE"
 
 def send_telegram(msg):
-    if "YOUR_BOT_TOKEN" in TELE_TOKEN: return 
+    if "8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU" in TELE_TOKEN: return 
     url = f"https://api.telegram.org/bot8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU/sendMessage"
     try:
-        requests.post(url, data={"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+        requests.post(url, data={"7970248513": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
     except Exception as e:
         st.error(f"Telegram alert failed: {e}")
 
