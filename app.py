@@ -8,7 +8,7 @@ from breeze_connect import BreezeConnect
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. SETTINGS & AUTO-REFRESH ---
-st.set_page_config(page_title="NIFTY Non-Repaint Terminal", layout="wide")
+st.set_page_config(page_title="NIFTY Non-Repaint Pro", layout="wide")
 st_autorefresh(interval=300000, key="refresh_200")
 
 # --- 2. CONFIGURATION ---
@@ -25,7 +25,7 @@ def send_telegram(msg):
     try: requests.post(url, data=payload)
     except: pass
 
-# --- 3. NON-REPAINT LOGIC ---
+# --- 3. CORE LOGIC (NON-REPAINT) ---
 def calculate_macd_and_signal(df):
     if df.empty or len(df) < 200: return None, None, None, "WAIT", []
     
@@ -38,22 +38,23 @@ def calculate_macd_and_signal(df):
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     hist = macd_line - signal_line
     
-    # NON-REPAINT LOGIC: Check the last CLOSED candle (index -2) against its predecessor (-3)
-    # This ensures the signal doesn't disappear if the current price fluctuates
-    prev_macd = macd_line.iloc[-3]
-    curr_macd = macd_line.iloc[-2] # Confirmed closed candle
+    # NON-REPAINT LOGIC:
+    # We check iloc[-2] (last closed candle) vs iloc[-3] (previous closed candle)
+    # This ensures that once a signal is generated, it stays on the chart.
+    prev_m = macd_line.iloc[-3]
+    curr_m = macd_line.iloc[-2] 
     
-    if prev_macd <= 0 and curr_macd > 0: status = "BUY"
-    elif prev_macd >= 0 and curr_macd < 0: status = "SELL"
-    else: status = "HOLD BUY" if curr_macd > 0 else "HOLD SELL"
+    if prev_m <= 0 and curr_m > 0: status = "BUY"
+    elif prev_m >= 0 and curr_m < 0: status = "SELL"
+    else: status = "HOLD BUY" if curr_m > 0 else "HOLD SELL"
     
-    # Identify all crossover points for arrows
+    # Find all crossovers for Arrow Plotting
     arrows = []
-    for i in range(1, len(macd_line)):
+    for i in range(1, len(macd_line) - 1): # Stop at -1 to avoid repainting live candle
         if macd_line.iloc[i-1] <= 0 and macd_line.iloc[i] > 0:
-            arrows.append((i, macd_line.iloc[i], 'green', '^')) # Buy Arrow
+            arrows.append({'idx': i, 'val': macd_line.iloc[i], 'type': 'BUY'})
         elif macd_line.iloc[i-1] >= 0 and macd_line.iloc[i] < 0:
-            arrows.append((i, macd_line.iloc[i], 'red', 'v')) # Sell Arrow
+            arrows.append({'idx': i, 'val': macd_line.iloc[i], 'type': 'SELL'})
             
     return macd_line, signal_line, hist, status, arrows
 
@@ -77,21 +78,23 @@ def show_indicator(col, title, strike, ltp, status):
 
 # --- 4. MAIN APP ---
 st.sidebar.header("🔐 Breeze Login")
+api_key = st.sidebar.text_input("API Key", value="3194b6xL482162_16NkJ368y350336i&")
+api_secret = st.sidebar.text_input("API Secret", type="password", value="(7@1q7426%p614#fk015~J9%4_$3v6Wh")
 session_token = st.sidebar.text_input("Session Token", type="password")
 
 if st.sidebar.button("Test Alert & Sound"):
     play_sound()
-    send_telegram("<b>🔔 Test Alert</b>: Signals are now Non-Repainting.")
+    send_telegram("<b>🔔 Test Alert</b>: Non-repaint logic is active with Arrows!")
 
 if 'last_signals' not in st.session_state:
     st.session_state.last_signals = {"idx": None, "ce": None, "pe": None}
 
 if session_token:
     try:
-        breeze = BreezeConnect(api_key="3194b6xL482162_16NkJ368y350336i&")
-        breeze.generate_session(api_secret="(7@1q7426%p614#fk015~J9%4_$3v6Wh", session_token=session_token)
+        breeze = BreezeConnect(api_key=api_key)
+        breeze.generate_session(api_secret=api_secret, session_token=session_token)
         
-        # Expiry Calculation
+        # Expiry logic
         today = datetime.today()
         year, month = (today.year, today.month + 1) if today.month < 12 else (today.year + 1, 1)
         last_day = calendar.monthrange(year, month)[1]
@@ -99,13 +102,13 @@ if session_token:
         while expiry.weekday() != 1: expiry -= timedelta(days=1)
         expiry_iso = expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
-        with st.spinner("Calculating Non-Repaint Signals..."):
-            # Data Fetching
-            to_d = datetime.now()
-            from_d = to_d - timedelta(days=15)
-            idx_raw = breeze.get_historical_data(interval="5minute", from_date=from_d.strftime("%Y-%m-%dT09:15:00.000Z"), to_date=to_d.strftime("%Y-%m-%dT15:30:00.000Z"), stock_code="NIFTY", exchange_code="NSE", product_type="cash")
+        to_d = datetime.now()
+        from_d = to_d - timedelta(days=14)
+
+        with st.spinner("Scanning Market..."):
+            idx_res = breeze.get_historical_data(interval="5minute", from_date=from_d.strftime("%Y-%m-%dT09:15:00.000Z"), to_date=to_d.strftime("%Y-%m-%dT15:30:00.000Z"), stock_code="NIFTY", exchange_code="NSE", product_type="cash")
             
-            # Strike Search
+            # Find Strike Logic
             chain = breeze.get_option_chain_quotes(stock_code="NIFTY", exchange_code="NFO", product_type="options", expiry_date=expiry_iso, right="call")
             df_opt = pd.DataFrame(chain["Success"])
             df_opt['strike_price'] = pd.to_numeric(df_opt['strike_price'])
@@ -114,35 +117,54 @@ if session_token:
             best_ce = df_opt.sort_values('diff').iloc[0]
             c_s, c_ltp = str(int(best_ce['strike_price'])), best_ce['ltp']
 
-            # Process & MACD
-            df_idx = process_data(pd.DataFrame(idx_raw["Success"]))
-            m_idx, s_idx, h_idx, stat_idx, arrows_idx = calculate_macd_and_signal(df_idx)
+            # Option Data Fetching
+            def fetch_opt(s, r):
+                res = breeze.get_historical_data(interval="5minute", from_date=from_d.strftime("%Y-%m-%dT09:15:00.000Z"), to_date=to_d.strftime("%Y-%m-%dT15:30:00.000Z"), stock_code="NIFTY", exchange_code="NFO", product_type="options", expiry_date=expiry_iso, right=r, strike_price=s)
+                return process_data(pd.DataFrame(res["Success"]))
 
-            # --- Dashboard UI ---
-            st.title("🏛 NIFTY Non-Repaint Terminal")
-            col1, col2, col3 = st.columns(3)
-            show_indicator(col1, "NIFTY INDEX", "SPOT", df_idx['close'].iloc[-1], stat_idx)
-            
-            # Alert & Sound Trigger
+            df_idx = process_data(pd.DataFrame(idx_res["Success"]))
+            df_ce = fetch_opt(c_s, "call")
+
+            # Calculate Signals
+            m_idx, s_idx, h_idx, stat_idx, arr_idx = calculate_macd_and_signal(df_idx)
+            m_ce, s_ce, h_ce, stat_ce, arr_ce = calculate_macd_and_signal(df_ce)
+
+            # --- ALERT TRIGGER ---
             if stat_idx in ["BUY", "SELL"] and stat_idx != st.session_state.last_signals["idx"]:
-                send_telegram(f"🏛 <b>NIFTY {stat_idx}</b> (Confirmed Closed Candle)")
+                send_telegram(f"🏛 <b>INDEX {stat_idx}</b> confirmed at {datetime.now().strftime('%H:%M')}")
                 play_sound()
                 st.session_state.last_signals["idx"] = stat_idx
 
-            # Chart with Arrows
-            plt.style.use('dark_background')
-            fig, ax = plt.subplots(figsize=(14, 6), facecolor='#0e1117')
-            idx_range = range(len(m_idx))
-            ax.plot(idx_range, m_idx, color='#3498db', label='MACD', linewidth=2)
-            ax.plot(idx_range, s_idx, color='orange', linestyle='--', alpha=0.5)
-            ax.bar(idx_range, h_idx, color=['#00ff88' if x > 0 else '#ff4444' for x in h_idx], alpha=0.2)
-            
-            # Plot arrows at crossover points
-            for x, y, color, marker in arrows_idx:
-                ax.scatter(x, y, color=color, marker=marker, s=150, zorder=5)
+            # --- UI ---
+            st.title("🏛 NIFTY Non-Repaint Terminal")
+            c1, c2 = st.columns(2)
+            show_indicator(c1, "NIFTY INDEX", "SPOT", df_idx['close'].iloc[-1], stat_idx)
+            show_indicator(c2, "CALL OPTION", f"{c_s} CE", c_ltp, stat_ce)
 
-            ax.set_facecolor('#161a25')
-            ax.set_title("NIFTY Index MACD (Arrows = Confirmed Crossovers)")
+            # --- PLOTTING WITH ARROWS ---
+            plt.style.use('dark_background')
+            fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(14, 10), facecolor='#0e1117', sharex=True)
+
+            def plot_with_arrows(ax, m, s, h, arrows, title):
+                if m is not None:
+                    x = range(len(m))
+                    ax.plot(x, m, color='#3498db', label='MACD', linewidth=2)
+                    ax.plot(x, s, color='orange', linestyle='--', alpha=0.5)
+                    ax.bar(x, h, color=['#00ff88' if val > 0 else '#ff4444' for val in h], alpha=0.2)
+                    
+                    # Add Arrows
+                    for a in arrows:
+                        color = 'green' if a['type'] == 'BUY' else 'red'
+                        marker = '^' if a['type'] == 'BUY' else 'v'
+                        ax.scatter(a['idx'], a['val'], color=color, marker=marker, s=100, zorder=5)
+                    
+                    ax.set_title(title, loc='left')
+                    ax.axhline(0, color='white', linewidth=0.5, alpha=0.5)
+                    ax.set_facecolor('#161a25')
+
+            plot_with_arrows(ax0, m_idx, s_idx, h_idx, arr_idx, "NIFTY INDEX MACD")
+            plot_with_arrows(ax1, m_ce, s_ce, h_ce, arr_ce, f"CALL {c_s} MACD")
+            
             st.pyplot(fig)
 
     except Exception as e: st.error(f"Error: {e}")
