@@ -17,10 +17,22 @@ TELE_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELE_CHAT_ID = "YOUR_CHAT_ID_HERE"
 
 def send_telegram(msg):
-    if "8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU" in TELE_TOKEN: return 
-    url = f"https://api.telegram.org/bot8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU/sendMessage"
+    # Use your actual Token and ID here
+    TOKEN = "8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU"
+    CHAT_ID = "7970248513"
+    
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID, 
+        "text": msg, 
+        "parse_mode": "HTML"
+    }
+    
     try:
-        requests.post(url, data={"7970248513": TELE_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+        response = requests.post(url, data=payload)
+        # This will show an error in Streamlit if something is still wrong
+        if response.status_code != 200:
+            st.error(f"Telegram Error: {response.text}")
     except Exception as e:
         st.error(f"Telegram alert failed: {e}")
 
