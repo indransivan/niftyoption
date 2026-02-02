@@ -8,8 +8,8 @@ from breeze_connect import BreezeConnect
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. SETTINGS & AUTO-REFRESH ---
-st.set_page_config(page_title="NIFTY Weekly (Tue Expiry) Terminal", layout="wide")
-st_autorefresh(interval=300000, key="refresh_300")
+st.set_page_config(page_title="NIFTY Next-Week Terminal", layout="wide")
+st_autorefresh(interval=300000, key="refresh_next_week")
 
 # --- 2. CONFIGURATION ---
 TELE_TOKEN = "8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU"
@@ -38,7 +38,7 @@ def calculate_macd_and_signal(df):
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     hist = macd_line - signal_line
     
-    # NON-REPAINT: Checking last closed candle
+    # NON-REPAINT: Checking last closed candle (-2)
     prev_m = macd_line.iloc[-3]
     curr_m = macd_line.iloc[-2] 
     
@@ -73,16 +73,17 @@ def show_indicator(col, title, strike, ltp, status):
         </div>
     """, unsafe_allow_html=True)
 
-# --- 4. TUESDAY WEEKLY EXPIRY LOGIC ---
-def get_next_tuesday_expiry():
+# --- 4. "NEXT WEEK" TUESDAY EXPIRY LOGIC ---
+def get_next_week_tuesday():
     today = datetime.today()
-    # 1 is Tuesday. (1 - today.weekday()) % 7 calculates days to next Tuesday
-    days_until_tuesday = (1 - today.weekday()) % 7
-    # If today is Tuesday and market is closed (after 3:30 PM), move to next week
-    if days_until_tuesday == 0 and today.hour >= 15 and today.minute >= 30:
-        days_until_tuesday = 7
-    expiry = today + timedelta(days=days_until_tuesday)
-    return expiry.strftime("%Y-%m-%dT07:00:00.000Z")
+    # Find days until the very next Tuesday
+    days_to_first_tue = (1 - today.weekday()) % 7
+    if days_to_first_tue == 0 and today.hour >= 15: # If today is Tuesday post-market
+        days_to_first_tue = 7
+    
+    # Add 7 days to the first Tuesday to get the "Next Week" Tuesday
+    next_week_tue = today + timedelta(days=days_to_first_tue + 7)
+    return next_week_tue.strftime("%Y-%m-%dT07:00:00.000Z")
 
 # --- 5. MAIN APP ---
 st.sidebar.header("🔐 Breeze Login")
@@ -96,11 +97,11 @@ if session_token:
         breeze = BreezeConnect(api_key="3194b6xL482162_16NkJ368y350336i&")
         breeze.generate_session(api_secret="(7@1q7426%p614#fk015~J9%4_$3v6Wh", session_token=session_token)
         
-        expiry_iso = get_next_tuesday_expiry()
+        expiry_iso = get_next_week_tuesday()
 
-        with st.spinner("Analyzing 300 Candles (Tuesday Expiry)..."):
+        with st.spinner(f"Loading Next-Week Expiry: {expiry_iso[:10]}..."):
             to_d = datetime.now()
-            from_d = to_d - timedelta(days=22) # Extended range to ensure 300 15m candles
+            from_d = to_d - timedelta(days=25) # Slightly more buffer for 300 15m candles
             
             idx_raw = breeze.get_historical_data(interval="5minute", from_date=from_d.strftime("%Y-%m-%dT09:15:00.000Z"), to_date=to_d.strftime("%Y-%m-%dT15:30:00.000Z"), stock_code="NIFTY", exchange_code="NSE", product_type="cash")
             
@@ -124,49 +125,49 @@ if session_token:
             df_ce = fetch_opt(c_s, "call")
             df_pe = fetch_opt(p_s, "put")
 
+            # Calculations
             m_idx, s_idx, h_idx, stat_idx, arr_idx = calculate_macd_and_signal(df_idx)
             m_ce, s_ce, h_ce, stat_ce, arr_ce = calculate_macd_and_signal(df_ce)
             m_pe, s_pe, h_pe, stat_pe, arr_pe = calculate_macd_and_signal(df_pe)
 
-            # --- ALERTS ---
+            # --- ALERT TRIGGER ---
             t_now = datetime.now().strftime("%H:%M")
-            alert_triggered = False
+            alert_active = False
             for key, stat, label in [("idx", stat_idx, "INDEX"), ("ce", stat_ce, f"CALL {c_s}"), ("pe", stat_pe, f"PUT {p_s}")]:
                 if stat in ["BUY", "SELL"] and stat != st.session_state.last_signals[key]:
-                    send_telegram(f"📢 <b>{label}: {stat}</b>\nExpiry (Tue): {expiry_iso[:10]}\nConfirmed at {t_now}")
+                    send_telegram(f"⚡ <b>NEXT-WEEK ALERT</b>\n<b>{label}: {stat}</b>\nExpiry: {expiry_iso[:10]}\nTime: {t_now}")
                     st.session_state.last_signals[key] = stat
-                    alert_triggered = True
-            
-            if alert_triggered: play_sound()
+                    alert_active = True
+            if alert_active: play_sound()
 
-            # --- UI ---
-            st.title("🏛 NIFTY Weekly Terminal (300 Samples)")
-            st.info(f"Targeting Tuesday Expiry: {expiry_iso[:10]} | Lookback: 300 Candles")
+            # --- UI LAYOUT ---
+            st.title("🚦 NIFTY Next-Week Strategy")
+            st.warning(f"Active Expiry: {expiry_iso[:10]} (Following Tuesday) | Lookback: 300 Candles")
             
             c1, c2, c3 = st.columns(3)
             show_indicator(c1, "NIFTY INDEX", "SPOT", df_idx['close'].iloc[-1], stat_idx)
-            show_indicator(c2, f"CALL {c_s}", "₹50 TARGET", c_ltp, stat_ce)
-            show_indicator(c3, f"PUT {p_s}", "₹50 TARGET", p_ltp, stat_pe)
+            show_indicator(c2, f"{c_s} CE", "NEXT WEEK", c_ltp, stat_ce)
+            show_indicator(c3, f"{p_s} PE", "NEXT WEEK", p_ltp, stat_pe)
 
             plt.style.use('dark_background')
             fig, (ax0, ax1, ax2) = plt.subplots(3, 1, figsize=(14, 18), facecolor='#0e1117', sharex=True)
 
-            def plot_with_arrows(ax, m, s, h, arrows, title):
+            def plot_styled(ax, m, s, h, arrows, title):
                 if m is not None:
-                    x = range(len(m))
-                    ax.plot(x, m, color='#3498db', linewidth=2)
-                    ax.plot(x, s, color='orange', linestyle='--', alpha=0.5)
-                    ax.bar(x, h, color=['#00ff88' if val > 0 else '#ff4444' for val in h], alpha=0.2)
+                    idx_range = range(len(m))
+                    ax.plot(idx_range, m, color='#3498db', linewidth=2, label='MACD')
+                    ax.plot(idx_range, s, color='orange', linestyle='--', alpha=0.5)
+                    ax.bar(idx_range, h, color=['#00ff88' if v > 0 else '#ff4444' for v in h], alpha=0.2)
                     for a in arrows:
                         ax.scatter(a['idx'], a['val'], color='green' if a['type'] == 'BUY' else 'red', 
-                                   marker='^' if a['type'] == 'BUY' else 'v', s=100, zorder=5)
-                    ax.set_title(title, loc='left', fontsize=14)
+                                   marker='^' if a['type'] == 'BUY' else 'v', s=120, zorder=10)
+                    ax.set_title(title, loc='left', fontsize=12)
                     ax.axhline(0, color='white', linewidth=0.5, alpha=0.5)
                     ax.set_facecolor('#161a25')
 
-            plot_with_arrows(ax0, m_idx, s_idx, h_idx, arr_idx, "INDEX MACD")
-            plot_with_arrows(ax1, m_ce, s_ce, h_ce, arr_ce, f"CALL {c_s} MACD")
-            plot_with_arrows(ax2, m_pe, s_pe, h_pe, arr_pe, f"PUT {p_s} MACD")
+            plot_styled(ax0, m_idx, s_idx, h_idx, arr_idx, "NIFTY INDEX MACD")
+            plot_styled(ax1, m_ce, s_ce, h_ce, arr_ce, f"NEXT WEEK CALL {c_s} MACD")
+            plot_styled(ax2, m_pe, s_pe, h_pe, arr_pe, f"NEXT WEEK PUT {p_s} MACD")
             
             st.pyplot(fig)
 
