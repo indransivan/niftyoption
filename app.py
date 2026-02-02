@@ -90,7 +90,7 @@ if session_token:
         year, month = (today.year, today.month + 1) if today.month < 12 else (today.year + 1, 1)
         last_day = calendar.monthrange(year, month)[1]
         expiry = datetime(year, month, last_day)
-        while expiry.weekday() != 1: expiry -= timedelta(days=1)
+        while expiry.weekday() != 0: expiry -= timedelta(days=1)
         expiry_iso = expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
         with st.spinner("Analyzing Index and Options..."):
