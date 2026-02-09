@@ -15,9 +15,9 @@ st_autorefresh(interval=300000, key="refresh_200_next")
 TELE_TOKEN = "8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU"
 TELE_CHAT_ID = "7970248513"
 
-def play_sound():
-    sound_url = "https://www.soundjay.com/buttons/beep-07a.mp3"
-    st.components.v1.html(f'<audio autoplay><source src="{sound_url}"></audio>', height=0, width=0)
+#def play_sound():
+#    sound_url = "https://www.soundjay.com/buttons/beep-07a.mp3"
+#    st.components.v1.html(f'<audio autoplay><source src="{sound_url}"></audio>', height=0, width=0)
 
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
