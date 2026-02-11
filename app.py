@@ -140,7 +140,7 @@ if session_token:
                     send_telegram(f"🔔 <b>{label}: {stat}</b>\n(Next Week Expiry: {expiry_iso[:10]})\nTime: {t_now}")
                     st.session_state.last_signals[key] = stat
                     alert_active = True
-            if alert_active: play_sound()
+            #if alert_active: play_sound()
 
             # --- UI ---
             st.title("🏛 NIFTY Next-Week (200 Candles)")
