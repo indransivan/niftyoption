@@ -22,7 +22,7 @@ def send_telegram(msg):
     except: pass
 
 # --- 3. INDICATOR LOGIC ---
-def calculate_supertrend(df, period=5, multiplier=2):
+def calculate_supertrend(df, period=10, multiplier=3):
     high, low, close = df['high'], df['low'], df['close']
     tr1 = high - low
     tr2 = abs(high - close.shift(1))
