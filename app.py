@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 from datetime import datetime, timedelta
-import calendar
 from breeze_connect import BreezeConnect
 from streamlit_autorefresh import st_autorefresh
 
@@ -15,19 +15,14 @@ st_autorefresh(interval=300000, key="refresh_200_next")
 TELE_TOKEN = "8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU"
 TELE_CHAT_ID = "7970248513"
 
-#def play_sound():
-#    sound_url = "https://www.soundjay.com/buttons/beep-07a.mp3"
-#    st.components.v1.html(f'<audio autoplay><source src="{sound_url}"></audio>', height=0, width=0)
-
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
     payload = {"chat_id": TELE_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     try: requests.post(url, data=payload)
     except: pass
 
-# --- 3. CORE LOGIC (200 CANDLE NON-REPAINT) ---
+# --- 3. CORE LOGIC ---
 def calculate_macd_and_signal(df):
-    # Set to 200 samples as requested
     if df.empty or len(df) < 200: return None, None, None, "WAIT", []
     
     df_limited = df.tail(200).copy().reset_index(drop=True)
@@ -60,9 +55,55 @@ def process_data(df_raw):
     if df_raw.empty: return pd.DataFrame()
     df = df_raw.copy()
     df['datetime'] = pd.to_datetime(df['datetime'])
-    # Resample to 15-minute intervals
-    df = df.set_index('datetime').resample('15min').agg({'close':'last'}).dropna()
-    return df.reset_index(drop=True)
+    # Resample to 15-minute intervals keeping OHLC for candles
+    df = df.set_index('datetime').resample('15min').agg({
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last'
+    }).dropna()
+    return df.reset_index()
+
+def draw_combined_chart(df, m, s, h, arrows, title):
+    """Renders a Candlestick chart on top and MACD on bottom."""
+    if m is None:
+        st.warning(f"Not enough data for {title}")
+        return
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                        vertical_spacing=0.05, 
+                        row_heights=[0.7, 0.3],
+                        subplot_titles=(f"{title} Price", "MACD Indicator"))
+
+    # 1. Candlestick Chart
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df['open'], high=df['high'],
+        low=df['low'], close=df['close'], name='Price',
+        increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
+    ), row=1, col=1)
+
+    # 2. Add Buy/Sell Markers to Price Chart
+    for a in arrows:
+        color = "#00ff88" if a['type'] == 'BUY' else "#ff4444"
+        symbol = "triangle-up" if a['type'] == 'BUY' else "triangle-down"
+        y_val = df['low'].iloc[a['idx']] * 0.998 if a['type'] == 'BUY' else df['high'].iloc[a['idx']] * 1.002
+        
+        fig.add_trace(go.Scatter(
+            x=[a['idx']], y=[y_val], mode="markers",
+            marker=dict(color=color, size=15, symbol=symbol),
+            name=a['type'], showlegend=False
+        ), row=1, col=1)
+
+    # 3. MACD Components
+    fig.add_trace(go.Scatter(x=df.index, y=m, line=dict(color='#3498db', width=2), name='MACD'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=s, line=dict(color='orange', width=1, dash='dot'), name='Signal'), row=2, col=1)
+    
+    hist_colors = ['#26a69a' if val > 0 else '#ef5350' for val in h]
+    fig.add_trace(go.Bar(x=df.index, y=h, marker_color=hist_colors, name='Histogram'), row=2, col=1)
+
+    fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False,
+                      margin=dict(l=10, r=10, t=50, b=10))
+    st.plotly_chart(fig, use_container_width=True)
 
 def show_indicator(col, title, strike, ltp, status):
     bg_color = "#006400" if "BUY" in status else "#8B0000" if "SELL" in status else "#262730"
@@ -75,16 +116,13 @@ def show_indicator(col, title, strike, ltp, status):
         </div>
     """, unsafe_allow_html=True)
 
-# --- 4. "NEXT WEEK" TUESDAY EXPIRY LOGIC ---
+# --- 4. EXPIRY LOGIC ---
 def get_next_week_tuesday():
     today = datetime.today()
-    # Find days to the immediate next Tuesday (1)
     days_to_tue = (1 - today.weekday()) % 7
-    # If today is Tuesday after hours, move to next week
     if days_to_tue == 0 and today.hour >= 15:
         days_to_tue = 7
-    # Shift forward by 7 more days to get the "Next Week" contract
-    expiry = today + timedelta(days=days_to_tue + 6)
+    expiry = today + timedelta(days=days_to_tue + 7)
     return expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
 # --- 5. MAIN APP ---
@@ -103,7 +141,7 @@ if session_token:
 
         with st.spinner(f"Analyzing Next-Week Expiry: {expiry_iso[:10]}..."):
             to_d = datetime.now()
-            from_d = to_d - timedelta(days=20) # Range to cover 200 15m candles
+            from_d = to_d - timedelta(days=20) 
             
             idx_raw = breeze.get_historical_data(interval="5minute", from_date=from_d.strftime("%Y-%m-%dT09:15:00.000Z"), to_date=to_d.strftime("%Y-%m-%dT15:30:00.000Z"), stock_code="NIFTY", exchange_code="NSE", product_type="cash")
             
@@ -112,7 +150,7 @@ if session_token:
                 df_opt = pd.DataFrame(chain["Success"])
                 df_opt['strike_price'] = pd.to_numeric(df_opt['strike_price'])
                 df_opt = df_opt[df_opt['strike_price'] % 100 == 0]
-                df_opt['diff'] = abs(pd.to_numeric(df_opt['ltp']) - 50) # Target ₹50
+                df_opt['diff'] = abs(pd.to_numeric(df_opt['ltp']) - 50) 
                 best = df_opt.sort_values('diff').iloc[0]
                 return str(int(best['strike_price'])), float(best['ltp'])
 
@@ -127,50 +165,29 @@ if session_token:
             df_ce = fetch_opt(c_s, "call")
             df_pe = fetch_opt(p_s, "put")
 
-            # MACD Logic
             m_idx, s_idx, h_idx, stat_idx, arr_idx = calculate_macd_and_signal(df_idx)
             m_ce, s_ce, h_ce, stat_ce, arr_ce = calculate_macd_and_signal(df_ce)
             m_pe, s_pe, h_pe, stat_pe, arr_pe = calculate_macd_and_signal(df_pe)
 
-            # --- ALERT TRIGGER ---
+            # Alerts
             t_now = datetime.now().strftime("%H:%M")
-            alert_active = False
             for key, stat, label in [("idx", stat_idx, "INDEX"), ("ce", stat_ce, f"CALL {c_s}"), ("pe", stat_pe, f"PUT {p_s}")]:
                 if stat in ["BUY", "SELL"] and stat != st.session_state.last_signals[key]:
                     send_telegram(f"🔔 <b>{label}: {stat}</b>\n(Next Week Expiry: {expiry_iso[:10]})\nTime: {t_now}")
                     st.session_state.last_signals[key] = stat
-                    alert_active = True
-            #if alert_active: play_sound()
 
-            # --- UI ---
+            # UI Rendering
             st.title("🏛 NIFTY Next-Week (200 Candles)")
-            st.info(f"Scanning Following Tuesday: {expiry_iso[:10]} | Window: 200 Bars")
+            st.info(f"Scanning Following Tuesday: {expiry_iso[:10]} | Window: 200 Bars (15m)")
             
-            row = st.columns(3)
-            show_indicator(row[0], "NIFTY INDEX", "SPOT", df_idx['close'].iloc[-1], stat_idx)
-            show_indicator(row[1], f"CALL {c_s}", "₹50 TARGET", c_ltp, stat_ce)
-            show_indicator(row[2], f"PUT {p_s}", "₹50 TARGET", p_ltp, stat_pe)
+            cols = st.columns(3)
+            show_indicator(cols[0], "NIFTY INDEX", "SPOT", df_idx['close'].iloc[-1], stat_idx)
+            show_indicator(cols[1], f"CALL {c_s}", "₹50 TARGET", c_ltp, stat_ce)
+            show_indicator(cols[2], f"PUT {p_s}", "₹50 TARGET", p_ltp, stat_pe)
 
-            plt.style.use('dark_background')
-            fig, (ax0, ax1, ax2) = plt.subplots(3, 1, figsize=(14, 16), facecolor='#0e1117', sharex=True)
-
-            def plot_with_arrows(ax, m, s, h, arrows, title):
-                if m is not None:
-                    x = range(len(m))
-                    ax.plot(x, m, color='#3498db', linewidth=2)
-                    ax.plot(x, s, color='orange', linestyle='--', alpha=0.5)
-                    ax.bar(x, h, color=['#00ff88' if val > 0 else '#ff4444' for val in h], alpha=0.2)
-                    for a in arrows:
-                        ax.scatter(a['idx'], a['val'], color='green' if a['type'] == 'BUY' else 'red', 
-                                   marker='^' if a['type'] == 'BUY' else 'v', s=100, zorder=5)
-                    ax.set_title(title, loc='left')
-                    ax.axhline(0, color='white', linewidth=0.5, alpha=0.5)
-                    ax.set_facecolor('#161a25')
-
-            plot_with_arrows(ax0, m_idx, s_idx, h_idx, arr_idx, "INDEX MACD")
-            plot_with_arrows(ax1, m_ce, s_ce, h_ce, arr_ce, f"CALL {c_s} MACD")
-            plot_with_arrows(ax2, m_pe, s_pe, h_pe, arr_pe, f"PUT {p_s} MACD")
-            
-            st.pyplot(fig)
+            st.divider()
+            draw_combined_chart(df_idx, m_idx, s_idx, h_idx, arr_idx, "NIFTY SPOT")
+            draw_combined_chart(df_ce, m_ce, s_ce, h_ce, arr_ce, f"CALL {c_s}")
+            draw_combined_chart(df_pe, m_pe, s_pe, h_pe, arr_pe, f"PUT {p_s}")
 
     except Exception as e: st.error(f"Error: {e}")
