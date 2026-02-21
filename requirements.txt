@@ -1,6 +1,7 @@
 streamlit
-breeze-connect
 pandas
 matplotlib
-streamlit-autorefresh
+plotly
 requests
+breeze-connect
+streamlit-autorefresh
