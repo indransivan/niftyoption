@@ -121,8 +121,8 @@ def get_next_week_tuesday():
     today = datetime.today()
     days_to_tue = (1 - today.weekday()) % 7
     if days_to_tue == 0 and today.hour >= 15:
-        days_to_tue = 6
-    expiry = today + timedelta(days=days_to_tue + 7)
+        days_to_tue = 7
+    expiry = today + timedelta(days=days_to_tue + 6)
     return expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
 # --- 5. MAIN APP ---
