@@ -77,13 +77,20 @@ def process_data(df_raw):
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df['datetime'] = pd.to_datetime(df['datetime'])
     
-    # Filter only trading hours 09:15-15:30 IST
-    df = df[
-        ((df['datetime'].dt.hour > 9) | 
-         ((df['datetime'].dt.hour == 9) & (df['datetime'].dt.minute >= 15))) &
-        ((df['datetime'].dt.hour < 15) | 
-         ((df['datetime'].dt.hour == 15) & (df['datetime'].dt.minute <= 30)))
-    ]
+    # FIXED: Correct trading hours filter 09:15-15:30 IST
+    df['hour'] = df['datetime'].dt.hour
+    df['minute'] = df['datetime'].dt.minute
+    
+    # 09:15 to 15:30 IST inclusive
+    mask = (
+        # 09:15 to 09:59
+        ((df['hour'] == 9) & (df['minute'] >= 15)) |
+        # 10:00 to 14:59  
+        ((df['hour'] >= 10) & (df['hour'] <= 14)) |
+        # 15:00 to 15:30
+        ((df['hour'] == 15) & (df['minute'] <= 30))
+    )
+    df = df[mask].drop(['hour', 'minute'], axis=1)
     
     df = df.set_index('datetime').resample('15min').agg({
         'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'
@@ -96,7 +103,6 @@ def process_data(df_raw):
 
 # --- 3. UI COMPONENTS ---
 def show_indicator(col, title, status, ltp):
-    # Background: Green for Buy, Red for Sell
     bg = "#006400" if "BUY" in status else "#8B0000" if "SELL" in status else "#262730"
     col.markdown(f"""
         <div style="background-color:{bg}; padding:20px; border-radius:12px; text-align:center; border: 1px solid #444;">
@@ -186,7 +192,7 @@ if session_token:
             df_opt = pd.DataFrame(chain["Success"])
             df_opt['ltp'] = pd.to_numeric(df_opt['ltp'])
             df_opt['strike_price'] = pd.to_numeric(df_opt['strike_price'])
-            df_opt = df_opt[df_opt['strike_price'] % 100 == 0] # Filter for 100-step strikes
+            df_opt = df_opt[df_opt['strike_price'] % 100 == 0]
             best = df_opt.iloc[(df_opt['ltp'] - 60).abs().argsort()[:1]]
             return str(int(float(best['strike_price'].values[0])))
 
