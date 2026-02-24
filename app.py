@@ -149,7 +149,7 @@ if session_token:
         
         # Calculate Expiry (Thursday logic)
         today = datetime.today()
-        expiry = today + timedelta(days=((4 - today.weekday()) % 7))
+        expiry = datetime.today() + timedelta(days=((1 - datetime.today().weekday()) % 7) + 6)
         expiry_iso = expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
         def get_strike_at_60(right):
