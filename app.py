@@ -49,8 +49,9 @@ def calculate_supertrend(df, period=10, multiplier=3):
         supertrend[i] = lowerband[i] if direction[i] == 1 else upperband[i]
 
     status = "HOLD BUY" if direction[-1] == 1 else "HOLD SELL"
-    if direction[-1] == 1 and direction[-2] == -1: status = "BUY"
-    if direction[-1] == -1 and direction[-2] == 1: status = "SELL"
+    if len(direction) > 1:
+        if direction[-1] == 1 and direction[-2] == -1: status = "BUY"
+        if direction[-1] == -1 and direction[-2] == 1: status = "SELL"
     
     signals = []
     for i in range(1, len(direction)):
@@ -75,11 +76,20 @@ def process_data(df_raw):
     for col in ['open', 'high', 'low', 'close']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df['datetime'] = pd.to_datetime(df['datetime'])
+    
+    # Filter only trading hours 09:15-15:30 IST
+    df = df[
+        ((df['datetime'].dt.hour > 9) | 
+         ((df['datetime'].dt.hour == 9) & (df['datetime'].dt.minute >= 15))) &
+        ((df['datetime'].dt.hour < 15) | 
+         ((df['datetime'].dt.hour == 15) & (df['datetime'].dt.minute <= 30)))
+    ]
+    
     df = df.set_index('datetime').resample('15min').agg({
         'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'
     }).dropna()
     
-    # keep last 100 actual 15-min candles
+    # Keep last 100 actual 15-min trading candles
     df = df.tail(100)
     
     return df.reset_index()
@@ -92,7 +102,7 @@ def show_indicator(col, title, status, ltp):
         <div style="background-color:{bg}; padding:20px; border-radius:12px; text-align:center; border: 1px solid #444;">
             <p style="margin:0; color: white; font-size: 1rem; opacity: 0.8;">{title}</p>
             <h1 style="margin:10px 0; color: white; font-size: 2.5rem; letter-spacing: 2px;">{status}</h1>
-            <p style="margin:0; color: white; font-size: 1.2rem;">LTP: ₹{ltp}</p>
+            <p style="margin:0; color: white; font-size: 1.2rem;">LTP: ₹{ltp:.2f}</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -125,11 +135,11 @@ def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
     )
     
     for i in range(1, len(v_st)):
-        color = "#00ff88" if v_dir[i] == 1 else "#ff4444"
+        color = "#00ff88" if v_dir.iloc[i] == 1 else "#ff4444"
         fig.add_trace(
             go.Scatter(
                 x=[x_vals.iloc[i-1], x_vals.iloc[i]],
-                y=[v_st[i-1], v_st[i]],
+                y=[v_st.iloc[i-1], v_st.iloc[i]],
                 mode='lines',
                 line=dict(color=color, width=2.5),
                 showlegend=False
@@ -151,8 +161,13 @@ def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
         row=2, col=1
     )
 
-    fig.update_layout(height=600, template="plotly_dark",
-                      xaxis_rangeslider_visible=False, title=title)
+    fig.update_layout(
+        height=600, 
+        template="plotly_dark",
+        xaxis_rangeslider_visible=False, 
+        title=title,
+        xaxis_title="Time (09:15-15:30 IST)"
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # --- 4. MAIN ---
@@ -179,10 +194,17 @@ if session_token:
         p_s = get_strike_at_60("put")
 
         def fetch_data(s, r):
-            res = breeze.get_historical_data(interval="5minute", from_date=(datetime.now()-timedelta(days=15)).strftime("%Y-%m-%dT09:15:00.000Z"), 
-                                             to_date=datetime.now().strftime("%Y-%m-%dT15:30:00.000Z"), 
-                                             stock_code="NIFTY", exchange_code="NFO", product_type="options", 
-                                             expiry_date=expiry_iso, right=r, strike_price=s)
+            res = breeze.get_historical_data(
+                interval="5minute", 
+                from_date=(datetime.now()-timedelta(days=15)).strftime("%Y-%m-%dT09:15:00.000Z"), 
+                to_date=datetime.now().strftime("%Y-%m-%dT15:30:00.000Z"), 
+                stock_code="NIFTY", 
+                exchange_code="NFO", 
+                product_type="options", 
+                expiry_date=expiry_iso, 
+                right=r, 
+                strike_price=s
+            )
             df = process_data(pd.DataFrame(res["Success"]))
             st_l, st_d, stat, sigs = calculate_supertrend(df)
             m, sl, h = calculate_macd(df)
@@ -196,8 +218,8 @@ if session_token:
         show_indicator(cols[0], f"CALL {c_s}", stat_ce, df_ce['close'].iloc[-1])
         show_indicator(cols[1], f"PUT {p_s}", stat_pe, df_pe['close'].iloc[-1])
 
-        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL")
-        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT")
+        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL (09:15-15:30 IST)")
+        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT (09:15-15:30 IST)")
 
     except Exception as e: 
         st.error(f"Error: {e}")
