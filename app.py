@@ -9,7 +9,7 @@ from breeze_connect import BreezeConnect
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. SETTINGS & SECURITY ---
-st.set_page_config(page_title="NIFTY 100-Interval Terminal", layout="wide")
+st.set_page_config(page_title="NIFTY ST + MACD Terminal", layout="wide")
 st_autorefresh(interval=300000, key="refresh_st_macd")
 
 TELE_TOKEN = "8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU"
@@ -48,12 +48,11 @@ def calculate_supertrend(df, period=10, multiplier=3):
                 upperband[i] = upperband[i-1]
         supertrend[i] = lowerband[i] if direction[i] == 1 else upperband[i]
 
-    status = "HOLD BUY" if direction[-1] == 1 else "HOLD SELL"
-    if direction[-1] == 1 and direction[-2] == -1: status = "BUY"
-    if direction[-1] == -1 and direction[-2] == 1: status = "SELL"
+    prev_dir, curr_dir = direction[-3], direction[-2]
+    status = "BUY" if (prev_dir == -1 and curr_dir == 1) else "SELL" if (prev_dir == 1 and curr_dir == -1) else ("HOLD BUY" if curr_dir == 1 else "HOLD SELL")
     
     signals = []
-    for i in range(1, len(direction)):
+    for i in range(period, len(direction)):
         if direction[i] == 1 and direction[i-1] == -1: signals.append({'idx': i, 'type': 'BUY'})
         elif direction[i] == -1 and direction[i-1] == 1: signals.append({'idx': i, 'type': 'SELL'})
 
@@ -79,7 +78,6 @@ def process_data(df_raw):
 
 # --- 3. UI COMPONENTS ---
 def show_indicator(col, title, status, ltp):
-    # Background: Green for Buy, Red for Sell
     bg = "#006400" if "BUY" in status else "#8B0000" if "SELL" in status else "#262730"
     col.markdown(f"""
         <div style="background-color:{bg}; padding:20px; border-radius:12px; text-align:center; border: 1px solid #444;">
@@ -91,70 +89,82 @@ def show_indicator(col, title, status, ltp):
 
 def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
     if df.empty or st_line is None: return
-    v_df = df.tail(100).reset_index(drop=True)
-    v_st = st_line.tail(100).reset_index(drop=True)
-    v_dir = st_dir.tail(100).reset_index(drop=True)
-    v_m = m.tail(100).reset_index(drop=True)
-    v_s = s.tail(100).reset_index(drop=True)
-    v_h = h.tail(100).reset_index(drop=True)
+    v_df = df.tail(200).reset_index(drop=True)
+    v_st = st_line.tail(200).reset_index(drop=True)
+    v_dir = st_dir.tail(200).reset_index(drop=True)
+    v_m = m.tail(200).reset_index(drop=True)
+    v_s = s.tail(200).reset_index(drop=True)
+    v_h = h.tail(200).reset_index(drop=True)
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3],
+                        subplot_titles=(f"{title} - Price & Supertrend", "MACD Indicator"))
+    
     fig.add_trace(go.Candlestick(x=v_df.index, open=v_df['open'], high=v_df['high'], low=v_df['low'], close=v_df['close'], name='Price'), row=1, col=1)
     
     for i in range(1, len(v_st)):
         color = "#00ff88" if v_dir[i] == 1 else "#ff4444"
-        fig.add_trace(go.Scatter(x=[i-1, i], y=[v_st[i-1], v_st[i]], mode='lines', line=dict(color=color, width=2.5), showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[i-1, i], y=[v_st[i-1], v_st[i]], mode='lines', line=dict(color=color, width=3), showlegend=False, hoverinfo='skip'), row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=v_df.index, y=v_m, line=dict(color='#3498db'), name='MACD'), row=2, col=1)
-    fig.add_trace(go.Scatter(x=v_df.index, y=v_s, line=dict(color='orange', dash='dot'), name='Signal'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=v_df.index, y=v_m, line=dict(color='#3498db', width=2), name='MACD'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=v_df.index, y=v_s, line=dict(color='orange', width=1, dash='dot'), name='Signal'), row=2, col=1)
     h_colors = ['#26a69a' if val > 0 else '#ef5350' for val in v_h]
     fig.add_trace(go.Bar(x=v_df.index, y=v_h, marker_color=h_colors, name='Hist'), row=2, col=1)
 
-    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False, title=title)
+    fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=50, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
 # --- 4. MAIN ---
-session_token = st.sidebar.text_input("Breeze Session Token", type="password")
+st.sidebar.header("🔐 Breeze Login")
+session_token = st.sidebar.text_input("Session Token", type="password")
 
 if session_token:
     try:
         breeze = BreezeConnect(api_key=API_KEY)
         breeze.generate_session(api_secret=API_SECRET, session_token=session_token)
         
-        expiry = datetime.today() + timedelta(days=((1 - datetime.today().weekday()) % 7) + 6)
+        # RESTORED: Expiry Calculation
+        today = datetime.today()
+        expiry = today + timedelta(days=((1 - today.weekday()) % 7) + 6)
         expiry_iso = expiry.strftime("%Y-%m-%dT07:00:00.000Z")
 
-        def get_strike_at_60(right):
-            chain = breeze.get_option_chain_quotes(stock_code="NIFTY", exchange_code="NFO", product_type="options", expiry_date=expiry_iso, right=right)
-            df_opt = pd.DataFrame(chain["Success"])
-            df_opt['ltp'] = pd.to_numeric(df_opt['ltp'])
-            df_opt['strike_price'] = pd.to_numeric(df_opt['strike_price'])
-            df_opt = df_opt[df_opt['strike_price'] % 100 == 0] # Filter for 100-step strikes
-            best = df_opt.iloc[(df_opt['ltp'] - 60).abs().argsort()[:1]]
-            return str(int(float(best['strike_price'].values[0])))
+        with st.spinner("Analyzing Option Chains (Target: ₹60, 100-Step)..."):
+            # RESTORED: Strike Selection at 60 with 100-step logic
+            def get_strike_at_60(right):
+                chain = breeze.get_option_chain_quotes(stock_code="NIFTY", exchange_code="NFO", product_type="options", expiry_date=expiry_iso, right=right)
+                df_opt = pd.DataFrame(chain["Success"])
+                df_opt['ltp'] = pd.to_numeric(df_opt['ltp'])
+                df_opt['strike_price'] = pd.to_numeric(df_opt['strike_price'])
+                
+                # Filter for 100-step strikes (e.g., 26500, 26600)
+                df_opt = df_opt[df_opt['strike_price'] % 100 == 0]
+                
+                best = df_opt.iloc[(df_opt['ltp'] - 60).abs().argsort()[:1]]
+                return str(int(float(best['strike_price'].values[0]))), float(best['ltp'].values[0])
 
-        c_s = get_strike_at_60("call")
-        p_s = get_strike_at_60("put")
+            c_s, c_ltp = get_strike_at_60("call")
+            p_s, p_ltp = get_strike_at_60("put")
 
-        def fetch_data(s, r):
-            res = breeze.get_historical_data(interval="5minute", from_date=(datetime.now()-timedelta(days=15)).strftime("%Y-%m-%dT09:15:00.000Z"), 
-                                             to_date=datetime.now().strftime("%Y-%m-%dT15:30:00.000Z"), 
-                                             stock_code="NIFTY", exchange_code="NFO", product_type="options", 
-                                             expiry_date=expiry_iso, right=r, strike_price=s)
-            df = process_data(pd.DataFrame(res["Success"]))
-            st_l, st_d, stat, sigs = calculate_supertrend(df)
-            m, sl, h = calculate_macd(df)
-            return df, st_l, st_d, m, sl, h, stat, sigs
+            from_d_str = (datetime.now() - timedelta(days=35)).strftime("%Y-%m-%dT09:15:00.000Z")
+            to_d_str = datetime.now().strftime("%Y-%m-%dT15:30:00.000Z")
 
-        df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, stat_ce, sig_ce = fetch_data(c_s, "call")
-        df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, stat_pe, sig_pe = fetch_data(p_s, "put")
+            def get_full_data(s, r):
+                res = breeze.get_historical_data(interval="5minute", from_date=from_d_str, to_date=to_d_str, stock_code="NIFTY", exchange_code="NFO", product_type="options", expiry_date=expiry_iso, right=r, strike_price=s)
+                df = process_data(pd.DataFrame(res["Success"]))
+                st_l, st_d, stat, sigs = calculate_supertrend(df)
+                m, s_l, h = calculate_macd(df)
+                return df, st_l, st_d, m, s_l, h, stat, sigs
 
-        st.title("🏛 NIFTY 100-Step Options Terminal")
-        cols = st.columns(2)
-        show_indicator(cols[0], f"CALL {c_s}", stat_ce, df_ce['close'].iloc[-1])
-        show_indicator(cols[1], f"PUT {p_s}", stat_pe, df_pe['close'].iloc[-1])
+            df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, stat_ce, sig_ce = get_full_data(c_s, "call")
+            df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, stat_pe, sig_pe = get_full_data(p_s, "put")
 
-        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL")
-        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT")
+            st.title("🏛 NIFTY ST + MACD Terminal")
+            st.info(f"Expiry: {expiry_iso[:10]} | Strike Target: ₹60 (100-Interval) | ST(10,3) + MACD(12,26,9)")
+
+            cols = st.columns(2)
+            show_indicator(cols[0], f"CALL {c_s}", stat_ce, df_ce['close'].iloc[-1])
+            show_indicator(cols[1], f"PUT {p_s}", stat_pe, df_pe['close'].iloc[-1])
+
+            draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "CALL OPTION")
+            draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "PUT OPTION")
 
     except Exception as e: st.error(f"Error: {e}")
