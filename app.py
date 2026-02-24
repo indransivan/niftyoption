@@ -49,8 +49,9 @@ def calculate_supertrend(df, period=10, multiplier=3):
         supertrend[i] = lowerband[i] if direction[i] == 1 else upperband[i]
 
     status = "HOLD BUY" if direction[-1] == 1 else "HOLD SELL"
-    if direction[-1] == 1 and direction[-2] == -1: status = "BUY"
-    if direction[-1] == -1 and direction[-2] == 1: status = "SELL"
+    if len(direction) > 1:
+        if direction[-1] == 1 and direction[-2] == -1: status = "BUY"
+        if direction[-1] == -1 and direction[-2] == 1: status = "SELL"
     
     signals = []
     for i in range(1, len(direction)):
@@ -69,48 +70,97 @@ def calculate_macd(df):
     return macd_line, signal_line, hist
 
 def process_data(df_raw):
-    if df_raw.empty: return pd.DataFrame()
+    if df_raw.empty:
+        return pd.DataFrame()
     df = df_raw.copy()
     for col in ['open', 'high', 'low', 'close']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df['datetime'] = pd.to_datetime(df['datetime'])
-    df = df.set_index('datetime').resample('15min').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'}).dropna()
-    return df.reset_index()
+    
+    # Filter only trading hours 09:15-15:30 IST
+    df = df[
+        ((df['datetime'].dt.hour > 9) | 
+         ((df['datetime'].dt.hour == 9) & (df['datetime'].dt.minute >= 15))) &
+        ((df['datetime'].dt.hour < 15) | 
+         ((df['datetime'].dt.hour == 15) & (df['datetime'].dt.minute <= 30)))
+    ]
+    
+    df = df.set_index('datetime').resample('15min').agg({
+        'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'
+    }).dropna()
+    
+    # Keep last 100 actual 15-min trading candles
+    df = df.tail(100)
+    
+    return df.reset_index(drop=True)  # drop=True removes datetime column
 
 # --- 3. UI COMPONENTS ---
 def show_indicator(col, title, status, ltp):
-    # Background: Green for Buy, Red for Sell
     bg = "#006400" if "BUY" in status else "#8B0000" if "SELL" in status else "#262730"
     col.markdown(f"""
         <div style="background-color:{bg}; padding:20px; border-radius:12px; text-align:center; border: 1px solid #444;">
             <p style="margin:0; color: white; font-size: 1rem; opacity: 0.8;">{title}</p>
             <h1 style="margin:10px 0; color: white; font-size: 2.5rem; letter-spacing: 2px;">{status}</h1>
-            <p style="margin:0; color: white; font-size: 1.2rem;">LTP: ₹{ltp}</p>
+            <p style="margin:0; color: white; font-size: 1.2rem;">LTP: ₹{ltp:.2f}</p>
         </div>
         """, unsafe_allow_html=True)
 
 def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
-    if df.empty or st_line is None: return
-    v_df = df.tail(100).reset_index(drop=True)
-    v_st = st_line.tail(100).reset_index(drop=True)
-    v_dir = st_dir.tail(100).reset_index(drop=True)
-    v_m = m.tail(100).reset_index(drop=True)
-    v_s = s.tail(100).reset_index(drop=True)
-    v_h = h.tail(100).reset_index(drop=True)
+    if df.empty or st_line is None:
+        return
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-    fig.add_trace(go.Candlestick(x=v_df.index, open=v_df['open'], high=v_df['high'], low=v_df['low'], close=v_df['close'], name='Price'), row=1, col=1)
+    # Use index 0-99 as x-axis (1-100 candles)
+    x_vals = list(range(len(df)))
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        vertical_spacing=0.05, row_heights=[0.7, 0.3])
     
-    for i in range(1, len(v_st)):
-        color = "#00ff88" if v_dir[i] == 1 else "#ff4444"
-        fig.add_trace(go.Scatter(x=[i-1, i], y=[v_st[i-1], v_st[i]], mode='lines', line=dict(color=color, width=2.5), showlegend=False), row=1, col=1)
+    fig.add_trace(
+        go.Candlestick(
+            x=x_vals,
+            open=df['open'],
+            high=df['high'],
+            low=df['low'],
+            close=df['close'],
+            name='Price'
+        ),
+        row=1, col=1
+    )
+    
+    for i in range(1, len(st_line)):
+        color = "#00ff88" if st_dir.iloc[i] == 1 else "#ff4444"
+        fig.add_trace(
+            go.Scatter(
+                x=[i-1, i],
+                y=[st_line.iloc[i-1], st_line.iloc[i]],
+                mode='lines',
+                line=dict(color=color, width=2.5),
+                showlegend=False
+            ),
+            row=1, col=1
+        )
 
-    fig.add_trace(go.Scatter(x=v_df.index, y=v_m, line=dict(color='#3498db'), name='MACD'), row=2, col=1)
-    fig.add_trace(go.Scatter(x=v_df.index, y=v_s, line=dict(color='orange', dash='dot'), name='Signal'), row=2, col=1)
-    h_colors = ['#26a69a' if val > 0 else '#ef5350' for val in v_h]
-    fig.add_trace(go.Bar(x=v_df.index, y=v_h, marker_color=h_colors, name='Hist'), row=2, col=1)
+    fig.add_trace(
+        go.Scatter(x=x_vals, y=m, line=dict(color='#3498db'), name='MACD'),
+        row=2, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=x_vals, y=s, line=dict(color='orange', dash='dot'), name='Signal'),
+        row=2, col=1
+    )
+    h_colors = ['#26a69a' if val > 0 else '#ef5350' for val in h]
+    fig.add_trace(
+        go.Bar(x=x_vals, y=h, marker_color=h_colors, name='Hist'),
+        row=2, col=1
+    )
 
-    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False, title=title)
+    fig.update_layout(
+        height=600, 
+        template="plotly_dark",
+        xaxis_rangeslider_visible=False, 
+        title=title,
+        xaxis_title="Candle (1-100)"
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # --- 4. MAIN ---
@@ -129,7 +179,7 @@ if session_token:
             df_opt = pd.DataFrame(chain["Success"])
             df_opt['ltp'] = pd.to_numeric(df_opt['ltp'])
             df_opt['strike_price'] = pd.to_numeric(df_opt['strike_price'])
-            df_opt = df_opt[df_opt['strike_price'] % 100 == 0] # Filter for 100-step strikes
+            df_opt = df_opt[df_opt['strike_price'] % 100 == 0]
             best = df_opt.iloc[(df_opt['ltp'] - 60).abs().argsort()[:1]]
             return str(int(float(best['strike_price'].values[0])))
 
@@ -137,10 +187,17 @@ if session_token:
         p_s = get_strike_at_60("put")
 
         def fetch_data(s, r):
-            res = breeze.get_historical_data(interval="5minute", from_date=(datetime.now()-timedelta(days=15)).strftime("%Y-%m-%dT09:15:00.000Z"), 
-                                             to_date=datetime.now().strftime("%Y-%m-%dT15:30:00.000Z"), 
-                                             stock_code="NIFTY", exchange_code="NFO", product_type="options", 
-                                             expiry_date=expiry_iso, right=r, strike_price=s)
+            res = breeze.get_historical_data(
+                interval="5minute", 
+                from_date=(datetime.now()-timedelta(days=15)).strftime("%Y-%m-%dT09:15:00.000Z"), 
+                to_date=datetime.now().strftime("%Y-%m-%dT15:30:00.000Z"), 
+                stock_code="NIFTY", 
+                exchange_code="NFO", 
+                product_type="options", 
+                expiry_date=expiry_iso, 
+                right=r, 
+                strike_price=s
+            )
             df = process_data(pd.DataFrame(res["Success"]))
             st_l, st_d, stat, sigs = calculate_supertrend(df)
             m, sl, h = calculate_macd(df)
@@ -154,7 +211,8 @@ if session_token:
         show_indicator(cols[0], f"CALL {c_s}", stat_ce, df_ce['close'].iloc[-1])
         show_indicator(cols[1], f"PUT {p_s}", stat_pe, df_pe['close'].iloc[-1])
 
-        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL")
-        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT")
+        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL (Candles 1-100)")
+        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT (Candles 1-100)")
 
-    except Exception as e: st.error(f"Error: {e}")
+    except Exception as e: 
+        st.error(f"Error: {e}")
