@@ -92,7 +92,7 @@ def process_data(df_raw):
     # Keep last 100 actual 15-min trading candles
     df = df.tail(100)
     
-    return df.reset_index(drop=True)  # drop=True removes datetime column
+    return df.reset_index(drop=True)
 
 # --- 3. UI COMPONENTS ---
 def show_indicator(col, title, status, ltp):
@@ -109,7 +109,6 @@ def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
     if df.empty or st_line is None:
         return
 
-    # Use index 0-99 as x-axis (1-100 candles)
     x_vals = list(range(len(df)))
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
@@ -171,8 +170,10 @@ if session_token:
         breeze = BreezeConnect(api_key=API_KEY)
         breeze.generate_session(api_secret=API_SECRET, session_token=session_token)
         
+        # Calculate Expiry
         expiry = datetime.today() + timedelta(days=((1 - datetime.today().weekday()) % 7) + 6)
         expiry_iso = expiry.strftime("%Y-%m-%dT07:00:00.000Z")
+        expiry_readable = expiry.strftime("%d-%b-%Y") # Format: 26-Feb-2026
 
         def get_strike_at_60(right):
             chain = breeze.get_option_chain_quotes(stock_code="NIFTY", exchange_code="NFO", product_type="options", expiry_date=expiry_iso, right=right)
@@ -206,7 +207,11 @@ if session_token:
         df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, stat_ce, sig_ce = fetch_data(c_s, "call")
         df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, stat_pe, sig_pe = fetch_data(p_s, "put")
 
+        # UI Header with Expiry
         st.title("🏛 NIFTY 100-Step Options Terminal")
+        st.markdown(f"### 🗓 Target Expiry: **{expiry_readable}**")
+        st.divider()
+
         cols = st.columns(2)
         show_indicator(cols[0], f"CALL {c_s}", stat_ce, df_ce['close'].iloc[-1])
         show_indicator(cols[1], f"PUT {p_s}", stat_pe, df_pe['close'].iloc[-1])
