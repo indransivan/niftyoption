@@ -92,10 +92,11 @@ def process_data(df_raw):
     # Keep last 100 actual 15-min trading candles
     df = df.tail(100)
     
-    return df.reset_index(drop=True)  # drop=True removes datetime column
+    return df.reset_index()
 
 # --- 3. UI COMPONENTS ---
 def show_indicator(col, title, status, ltp):
+    # Background: Green for Buy, Red for Sell
     bg = "#006400" if "BUY" in status else "#8B0000" if "SELL" in status else "#262730"
     col.markdown(f"""
         <div style="background-color:{bg}; padding:20px; border-radius:12px; text-align:center; border: 1px solid #444;">
@@ -109,30 +110,36 @@ def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
     if df.empty or st_line is None:
         return
 
-    # Use index 0-99 as x-axis (1-100 candles)
-    x_vals = list(range(len(df)))
+    v_df = df.reset_index(drop=True)
+    v_st = st_line.tail(len(v_df)).reset_index(drop=True)
+    v_dir = st_dir.tail(len(v_df)).reset_index(drop=True)
+    v_m = m.tail(len(v_df)).reset_index(drop=True)
+    v_s = s.tail(len(v_df)).reset_index(drop=True)
+    v_h = h.tail(len(v_df)).reset_index(drop=True)
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         vertical_spacing=0.05, row_heights=[0.7, 0.3])
     
+    x_vals = v_df['datetime']
+
     fig.add_trace(
         go.Candlestick(
             x=x_vals,
-            open=df['open'],
-            high=df['high'],
-            low=df['low'],
-            close=df['close'],
+            open=v_df['open'],
+            high=v_df['high'],
+            low=v_df['low'],
+            close=v_df['close'],
             name='Price'
         ),
         row=1, col=1
     )
     
-    for i in range(1, len(st_line)):
-        color = "#00ff88" if st_dir.iloc[i] == 1 else "#ff4444"
+    for i in range(1, len(v_st)):
+        color = "#00ff88" if v_dir.iloc[i] == 1 else "#ff4444"
         fig.add_trace(
             go.Scatter(
-                x=[i-1, i],
-                y=[st_line.iloc[i-1], st_line.iloc[i]],
+                x=[x_vals.iloc[i-1], x_vals.iloc[i]],
+                y=[v_st.iloc[i-1], v_st.iloc[i]],
                 mode='lines',
                 line=dict(color=color, width=2.5),
                 showlegend=False
@@ -141,16 +148,16 @@ def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
         )
 
     fig.add_trace(
-        go.Scatter(x=x_vals, y=m, line=dict(color='#3498db'), name='MACD'),
+        go.Scatter(x=x_vals, y=v_m, line=dict(color='#3498db'), name='MACD'),
         row=2, col=1
     )
     fig.add_trace(
-        go.Scatter(x=x_vals, y=s, line=dict(color='orange', dash='dot'), name='Signal'),
+        go.Scatter(x=x_vals, y=v_s, line=dict(color='orange', dash='dot'), name='Signal'),
         row=2, col=1
     )
-    h_colors = ['#26a69a' if val > 0 else '#ef5350' for val in h]
+    h_colors = ['#26a69a' if val > 0 else '#ef5350' for val in v_h]
     fig.add_trace(
-        go.Bar(x=x_vals, y=h, marker_color=h_colors, name='Hist'),
+        go.Bar(x=x_vals, y=v_h, marker_color=h_colors, name='Hist'),
         row=2, col=1
     )
 
@@ -159,7 +166,7 @@ def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
         template="plotly_dark",
         xaxis_rangeslider_visible=False, 
         title=title,
-        xaxis_title="Candle (1-100)"
+        xaxis_title="Time (09:15-15:30 IST)"
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -179,7 +186,7 @@ if session_token:
             df_opt = pd.DataFrame(chain["Success"])
             df_opt['ltp'] = pd.to_numeric(df_opt['ltp'])
             df_opt['strike_price'] = pd.to_numeric(df_opt['strike_price'])
-            df_opt = df_opt[df_opt['strike_price'] % 100 == 0]
+            df_opt = df_opt[df_opt['strike_price'] % 100 == 0] # Filter for 100-step strikes
             best = df_opt.iloc[(df_opt['ltp'] - 60).abs().argsort()[:1]]
             return str(int(float(best['strike_price'].values[0])))
 
@@ -211,8 +218,8 @@ if session_token:
         show_indicator(cols[0], f"CALL {c_s}", stat_ce, df_ce['close'].iloc[-1])
         show_indicator(cols[1], f"PUT {p_s}", stat_pe, df_pe['close'].iloc[-1])
 
-        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL (Candles 1-100)")
-        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT (Candles 1-100)")
+        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL (09:15-15:30 IST)")
+        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT (09:15-15:30 IST)")
 
     except Exception as e: 
         st.error(f"Error: {e}")
