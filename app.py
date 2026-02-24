@@ -171,7 +171,7 @@ if session_token:
         breeze.generate_session(api_secret=API_SECRET, session_token=session_token)
         
         # Calculate Expiry
-        expiry = datetime.today() + timedelta(days=((1 - datetime.today().weekday()) % 7) + 6)
+        expiry = datetime.today() + timedelta(days=((1 - datetime.today().weekday()) % 7) + 7)
         expiry_iso = expiry.strftime("%Y-%m-%dT07:00:00.000Z")
         expiry_readable = expiry.strftime("%d-%b-%Y") # Format: 26-Feb-2026
 
