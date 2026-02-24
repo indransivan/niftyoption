@@ -69,12 +69,19 @@ def calculate_macd(df):
     return macd_line, signal_line, hist
 
 def process_data(df_raw):
-    if df_raw.empty: return pd.DataFrame()
+    if df_raw.empty:
+        return pd.DataFrame()
     df = df_raw.copy()
     for col in ['open', 'high', 'low', 'close']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df['datetime'] = pd.to_datetime(df['datetime'])
-    df = df.set_index('datetime').resample('15min').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'}).dropna()
+    df = df.set_index('datetime').resample('15min').agg({
+        'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'
+    }).dropna()
+    
+    # keep last 100 actual 15-min candles
+    df = df.tail(100)
+    
     return df.reset_index()
 
 # --- 3. UI COMPONENTS ---
@@ -90,27 +97,62 @@ def show_indicator(col, title, status, ltp):
         """, unsafe_allow_html=True)
 
 def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
-    if df.empty or st_line is None: return
-    v_df = df.tail(100).reset_index(drop=True)
-    v_st = st_line.tail(100).reset_index(drop=True)
-    v_dir = st_dir.tail(100).reset_index(drop=True)
-    v_m = m.tail(100).reset_index(drop=True)
-    v_s = s.tail(100).reset_index(drop=True)
-    v_h = h.tail(100).reset_index(drop=True)
+    if df.empty or st_line is None:
+        return
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-    fig.add_trace(go.Candlestick(x=v_df.index, open=v_df['open'], high=v_df['high'], low=v_df['low'], close=v_df['close'], name='Price'), row=1, col=1)
+    v_df = df.reset_index(drop=True)
+    v_st = st_line.tail(len(v_df)).reset_index(drop=True)
+    v_dir = st_dir.tail(len(v_df)).reset_index(drop=True)
+    v_m = m.tail(len(v_df)).reset_index(drop=True)
+    v_s = s.tail(len(v_df)).reset_index(drop=True)
+    v_h = h.tail(len(v_df)).reset_index(drop=True)
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        vertical_spacing=0.05, row_heights=[0.7, 0.3])
+    
+    x_vals = v_df['datetime']
+
+    fig.add_trace(
+        go.Candlestick(
+            x=x_vals,
+            open=v_df['open'],
+            high=v_df['high'],
+            low=v_df['low'],
+            close=v_df['close'],
+            name='Price'
+        ),
+        row=1, col=1
+    )
     
     for i in range(1, len(v_st)):
         color = "#00ff88" if v_dir[i] == 1 else "#ff4444"
-        fig.add_trace(go.Scatter(x=[i-1, i], y=[v_st[i-1], v_st[i]], mode='lines', line=dict(color=color, width=2.5), showlegend=False), row=1, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=[x_vals.iloc[i-1], x_vals.iloc[i]],
+                y=[v_st[i-1], v_st[i]],
+                mode='lines',
+                line=dict(color=color, width=2.5),
+                showlegend=False
+            ),
+            row=1, col=1
+        )
 
-    fig.add_trace(go.Scatter(x=v_df.index, y=v_m, line=dict(color='#3498db'), name='MACD'), row=2, col=1)
-    fig.add_trace(go.Scatter(x=v_df.index, y=v_s, line=dict(color='orange', dash='dot'), name='Signal'), row=2, col=1)
+    fig.add_trace(
+        go.Scatter(x=x_vals, y=v_m, line=dict(color='#3498db'), name='MACD'),
+        row=2, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=x_vals, y=v_s, line=dict(color='orange', dash='dot'), name='Signal'),
+        row=2, col=1
+    )
     h_colors = ['#26a69a' if val > 0 else '#ef5350' for val in v_h]
-    fig.add_trace(go.Bar(x=v_df.index, y=v_h, marker_color=h_colors, name='Hist'), row=2, col=1)
+    fig.add_trace(
+        go.Bar(x=x_vals, y=v_h, marker_color=h_colors, name='Hist'),
+        row=2, col=1
+    )
 
-    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False, title=title)
+    fig.update_layout(height=600, template="plotly_dark",
+                      xaxis_rangeslider_visible=False, title=title)
     st.plotly_chart(fig, use_container_width=True)
 
 # --- 4. MAIN ---
@@ -157,4 +199,5 @@ if session_token:
         draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL")
         draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT")
 
-    except Exception as e: st.error(f"Error: {e}")
+    except Exception as e: 
+        st.error(f"Error: {e}")
