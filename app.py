@@ -11,7 +11,7 @@ from streamlit_autorefresh import st_autorefresh
 # --- 1. SETTINGS & SECURITY ---
 st.set_page_config(page_title="NIFTY 100-Interval Terminal", layout="wide")
 # Auto-refresh every 1 minute to catch the latest data, even though chart is 15min
-st_autorefresh(interval=60000, key="refresh_st_macd") 
+st_autorefresh(interval=300000, key="refresh_st_macd") 
 
 TELE_TOKEN = "8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU"
 TELE_CHAT_ID = "7970248513"
