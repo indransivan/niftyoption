@@ -10,12 +10,21 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- 1. SETTINGS & SECURITY ---
 st.set_page_config(page_title="NIFTY 100-Interval Terminal", layout="wide")
-st_autorefresh(interval=300000, key="refresh_st_macd")
+# Auto-refresh every 1 minute to catch the latest data, even though chart is 15min
+st_autorefresh(interval=60000, key="refresh_st_macd") 
 
 TELE_TOKEN = "8213681556:AAFoRSCMGmvZz7KSvgeudwFUMv-xXg_mTzU"
 TELE_CHAT_ID = "7970248513"
 API_KEY = "3194b6xL482162_16NkJ368y350336i&"
 API_SECRET = "(7@1q7426%p614#fk015~J9%4_$3v6Wh"
+
+def send_telegram(message):
+    try:
+        url = f"https://api.telegram.org/bot{TELE_TOKEN}/sendMessage"
+        payload = {"chat_id": TELE_CHAT_ID, "text": message}
+        requests.post(url, json=payload)
+    except Exception as e:
+        st.error(f"Telegram Error: {e}")
 
 # --- 2. INDICATOR LOGIC ---
 def calculate_supertrend(df, period=10, multiplier=3):
@@ -77,7 +86,6 @@ def process_data(df_raw):
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df['datetime'] = pd.to_datetime(df['datetime'])
     
-    # Filter only trading hours 09:15-15:30 IST
     df = df[
         ((df['datetime'].dt.hour > 9) | 
          ((df['datetime'].dt.hour == 9) & (df['datetime'].dt.minute >= 15))) &
@@ -85,11 +93,11 @@ def process_data(df_raw):
          ((df['datetime'].dt.hour == 15) & (df['datetime'].dt.minute <= 30)))
     ]
     
+    # --- AGGREGATING 1m DATA BACK TO 15m FOR CHARTING ---
     df = df.set_index('datetime').resample('15min').agg({
         'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'
     }).dropna()
     
-    # Keep last 100 actual 15-min trading candles
     df = df.tail(100)
     
     return df.reset_index(drop=True)
@@ -158,7 +166,7 @@ def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
         template="plotly_dark",
         xaxis_rangeslider_visible=False, 
         title=title,
-        xaxis_title="Candle (1-100)"
+        xaxis_title="Candle (1-100 x 15min)"
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -170,10 +178,9 @@ if session_token:
         breeze = BreezeConnect(api_key=API_KEY)
         breeze.generate_session(api_secret=API_SECRET, session_token=session_token)
         
-        # Calculate Expiry
         expiry = datetime.today() + timedelta(days=((1 - datetime.today().weekday()) % 7) + 7)
         expiry_iso = expiry.strftime("%Y-%m-%dT07:00:00.000Z")
-        expiry_readable = expiry.strftime("%d-%b-%Y") # Format: 26-Feb-2026
+        expiry_readable = expiry.strftime("%d-%b-%Y")
 
         def get_strike_at_60(right):
             chain = breeze.get_option_chain_quotes(stock_code="NIFTY", exchange_code="NFO", product_type="options", expiry_date=expiry_iso, right=right)
@@ -188,9 +195,10 @@ if session_token:
         p_s = get_strike_at_60("put")
 
         def fetch_data(s, r):
+            # Fetching 1-minute data
             res = breeze.get_historical_data(
-                interval="5minute", 
-                from_date=(datetime.now()-timedelta(days=15)).strftime("%Y-%m-%dT09:15:00.000Z"), 
+                interval="1minute", 
+                from_date=(datetime.now()-timedelta(days=10)).strftime("%Y-%m-%dT09:15:00.000Z"), 
                 to_date=datetime.now().strftime("%Y-%m-%dT15:30:00.000Z"), 
                 stock_code="NIFTY", 
                 exchange_code="NFO", 
@@ -199,25 +207,30 @@ if session_token:
                 right=r, 
                 strike_price=s
             )
+            # process_data converts the 1m rows into 15m candles
             df = process_data(pd.DataFrame(res["Success"]))
             st_l, st_d, stat, sigs = calculate_supertrend(df)
             m, sl, h = calculate_macd(df)
+            
+            if stat in ["BUY", "SELL"]:
+                msg = f"🚀 {stat} SIGNAL: NIFTY {s} {r.upper()}\nLTP: ₹{df['close'].iloc[-1]}"
+                send_telegram(msg)
+                
             return df, st_l, st_d, m, sl, h, stat, sigs
 
         df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, stat_ce, sig_ce = fetch_data(c_s, "call")
         df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, stat_pe, sig_pe = fetch_data(p_s, "put")
 
-        # UI Header with Expiry
         st.title("🏛 NIFTY 100-Step Options Terminal")
-        st.markdown(f"### 🗓 Target Expiry: **{expiry_readable}**")
+        st.markdown(f"### 🗓 Target Expiry: **{expiry_readable}** | 📊 View: **15 Minute Candles**")
         st.divider()
 
         cols = st.columns(2)
         show_indicator(cols[0], f"CALL {c_s}", stat_ce, df_ce['close'].iloc[-1])
         show_indicator(cols[1], f"PUT {p_s}", stat_pe, df_pe['close'].iloc[-1])
 
-        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL (Candles 1-100)")
-        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT (Candles 1-100)")
+        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL (15m Candles)")
+        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT (15m Candles)")
 
     except Exception as e: 
         st.error(f"Error: {e}")
