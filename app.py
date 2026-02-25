@@ -27,48 +27,6 @@ def send_telegram(message):
         st.error(f"Telegram Error: {e}")
 
 # --- 2. INDICATOR LOGIC ---
-def calculate_supertrend(df, period=7, multiplier=2.2):
-    df = df.copy()
-    high, low, close = df['high'], df['low'], df['close']
-    tr1 = high - low
-    tr2 = abs(high - close.shift(1))
-    tr3 = abs(low - close.shift(1))
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
-
-    hl2 = (high + low) / 2
-    upperband = (hl2 + (multiplier * atr)).to_numpy()
-    lowerband = (hl2 - (multiplier * atr)).to_numpy()
-    close_np = close.to_numpy()
-    
-    supertrend = [0.0] * len(df)
-    direction = [1] * len(df)
-
-    for i in range(1, len(df)):
-        if close_np[i] > upperband[i-1]:
-            direction[i] = 1
-        elif close_np[i] < lowerband[i-1]:
-            direction[i] = -1
-        else:
-            direction[i] = direction[i-1]
-            if direction[i] == 1 and lowerband[i] < lowerband[i-1]:
-                lowerband[i] = lowerband[i-1]
-            if direction[i] == -1 and upperband[i] > upperband[i-1]:
-                upperband[i] = upperband[i-1]
-        supertrend[i] = lowerband[i] if direction[i] == 1 else upperband[i]
-
-    status = "HOLD BUY" if direction[-1] == 1 else "HOLD SELL"
-    if len(direction) > 1:
-        if direction[-1] == 1 and direction[-2] == -1: status = "BUY"
-        if direction[-1] == -1 and direction[-2] == 1: status = "SELL"
-    
-    signals = []
-    for i in range(1, len(direction)):
-        if direction[i] == 1 and direction[i-1] == -1: signals.append({'idx': i, 'type': 'BUY'})
-        elif direction[i] == -1 and direction[i-1] == 1: signals.append({'idx': i, 'type': 'SELL'})
-
-    return pd.Series(supertrend, index=df.index), pd.Series(direction, index=df.index), status, signals
-
 def calculate_macd(df):
     close = df['close']
     ema12 = close.ewm(span=12, adjust=False).mean()
@@ -77,6 +35,42 @@ def calculate_macd(df):
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     hist = macd_line - signal_line
     return macd_line, signal_line, hist
+
+# MACD-based, non-repainting buy/sell signal generator
+# Buy when MACD crosses from below 0 to above 0, Sell when MACD crosses from above 0 to below 0
+def calculate_macd_signals(macd_series):
+    directions = []
+    signals = []
+
+    prev = macd_series.iloc[0]
+    directions.append(1 if prev > 0 else -1 if prev < 0 else 0)
+
+    for i in range(1, len(macd_series)):
+        cur = macd_series.iloc[i]
+        cur_dir = 1 if cur > 0 else -1 if cur < 0 else 0
+        directions.append(cur_dir)
+
+        # Zero-line cross (closed candle) => non-repainting
+        if cur_dir == 1 and directions[i-1] <= 0:
+            signals.append({'idx': i, 'type': 'BUY'})
+        elif cur_dir == -1 and directions[i-1] >= 0:
+            signals.append({'idx': i, 'type': 'SELL'})
+
+    last_dir = directions[-1]
+    if last_dir > 0:
+        status = "HOLD BUY"
+    elif last_dir < 0:
+        status = "HOLD SELL"
+    else:
+        status = "NEUTRAL"
+
+    if len(directions) > 1:
+        if directions[-1] == 1 and directions[-2] <= 0:
+            status = "BUY"
+        elif directions[-1] == -1 and directions[-2] >= 0:
+            status = "SELL"
+
+    return pd.Series(directions, index=macd_series.index), status, signals
 
 def process_data(df_raw):
     if df_raw.empty:
@@ -113,8 +107,8 @@ def show_indicator(col, title, status, ltp):
         </div>
         """, unsafe_allow_html=True)
 
-def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
-    if df.empty or st_line is None:
+def draw_combined_chart(df, macd_line, signal_line, hist, macd_signals, title):
+    if df.empty or macd_line is None:
         return
 
     x_vals = list(range(len(df)))
@@ -134,32 +128,50 @@ def draw_combined_chart(df, st_line, st_dir, m, s, h, signals, title):
         row=1, col=1
     )
     
-    for i in range(1, len(st_line)):
-        color = "#00ff88" if st_dir.iloc[i] == 1 else "#ff4444"
+    # MACD, Signal, Histogram
+    fig.add_trace(
+        go.Scatter(x=x_vals, y=macd_line, line=dict(color='#3498db'), name='MACD'),
+        row=2, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=x_vals, y=signal_line, line=dict(color='orange', dash='dot'), name='Signal'),
+        row=2, col=1
+    )
+    h_colors = ['#26a69a' if val > 0 else '#ef5350' for val in hist]
+    fig.add_trace(
+        go.Bar(x=x_vals, y=hist, marker_color=h_colors, name='Hist'),
+        row=2, col=1
+    )
+
+    # Mark buy/sell points on MACD sub-plot
+    buy_x = [s['idx'] for s in macd_signals if s['type'] == 'BUY']
+    buy_y = [macd_line.iloc[s['idx']] for s in macd_signals if s['type'] == 'BUY']
+    sell_x = [s['idx'] for s in macd_signals if s['type'] == 'SELL']
+    sell_y = [macd_line.iloc[s['idx']] for s in macd_signals if s['type'] == 'SELL']
+
+    if buy_x:
         fig.add_trace(
             go.Scatter(
-                x=[i-1, i],
-                y=[st_line.iloc[i-1], st_line.iloc[i]],
-                mode='lines',
-                line=dict(color=color, width=2.5),
-                showlegend=False
+                x=buy_x,
+                y=buy_y,
+                mode='markers',
+                marker=dict(color='#00ff88', size=10, symbol='triangle-up'),
+                name='BUY'
             ),
-            row=1, col=1
+            row=2, col=1
         )
 
-    fig.add_trace(
-        go.Scatter(x=x_vals, y=m, line=dict(color='#3498db'), name='MACD'),
-        row=2, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=x_vals, y=s, line=dict(color='orange', dash='dot'), name='Signal'),
-        row=2, col=1
-    )
-    h_colors = ['#26a69a' if val > 0 else '#ef5350' for val in h]
-    fig.add_trace(
-        go.Bar(x=x_vals, y=h, marker_color=h_colors, name='Hist'),
-        row=2, col=1
-    )
+    if sell_x:
+        fig.add_trace(
+            go.Scatter(
+                x=sell_x,
+                y=sell_y,
+                mode='markers',
+                marker=dict(color='#ff4444', size=10, symbol='triangle-down'),
+                name='SELL'
+            ),
+            row=2, col=1
+        )
 
     fig.update_layout(
         height=600, 
@@ -183,7 +195,13 @@ if session_token:
         expiry_readable = expiry.strftime("%d-%b-%Y")
 
         def get_strike_at_60(right):
-            chain = breeze.get_option_chain_quotes(stock_code="NIFTY", exchange_code="NFO", product_type="options", expiry_date=expiry_iso, right=right)
+            chain = breeze.get_option_chain_quotes(
+                stock_code="NIFTY",
+                exchange_code="NFO",
+                product_type="options",
+                expiry_date=expiry_iso,
+                right=right
+            )
             df_opt = pd.DataFrame(chain["Success"])
             df_opt['ltp'] = pd.to_numeric(df_opt['ltp'])
             df_opt['strike_price'] = pd.to_numeric(df_opt['strike_price'])
@@ -209,17 +227,17 @@ if session_token:
             )
             # process_data converts the 1m rows into 15m candles
             df = process_data(pd.DataFrame(res["Success"]))
-            st_l, st_d, stat, sigs = calculate_supertrend(df)
-            m, sl, h = calculate_macd(df)
+            macd_line, signal_line, hist = calculate_macd(df)
+            directions, stat, sigs = calculate_macd_signals(macd_line)
             
             if stat in ["BUY", "SELL"]:
-                msg = f"🚀 {stat} SIGNAL: NIFTY {s} {r.upper()}\nLTP: ₹{df['close'].iloc[-1]}"
+                msg = f"🚀 {stat} SIGNAL: NIFTY {s} {r.upper()}\\nLTP: ₹{df['close'].iloc[-1]}"
                 send_telegram(msg)
                 
-            return df, st_l, st_d, m, sl, h, stat, sigs
+            return df, macd_line, signal_line, hist, stat, sigs
 
-        df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, stat_ce, sig_ce = fetch_data(c_s, "call")
-        df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, stat_pe, sig_pe = fetch_data(p_s, "put")
+        df_ce, m_ce, sl_ce, h_ce, stat_ce, sig_ce = fetch_data(c_s, "call")
+        df_pe, m_pe, sl_pe, h_pe, stat_pe, sig_pe = fetch_data(p_s, "put")
 
         st.title("🏛 NIFTY 100-Step Options Terminal")
         st.markdown(f"### 🗓 Target Expiry: **{expiry_readable}** | 📊 View: **15 Minute Candles**")
@@ -229,8 +247,8 @@ if session_token:
         show_indicator(cols[0], f"CALL {c_s}", stat_ce, df_ce['close'].iloc[-1])
         show_indicator(cols[1], f"PUT {p_s}", stat_pe, df_pe['close'].iloc[-1])
 
-        draw_combined_chart(df_ce, stl_ce, std_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL (15m Candles)")
-        draw_combined_chart(df_pe, stl_pe, std_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT (15m Candles)")
+        draw_combined_chart(df_ce, m_ce, sl_ce, h_ce, sig_ce, "NIFTY CALL (15m Candles)")
+        draw_combined_chart(df_pe, m_pe, sl_pe, h_pe, sig_pe, "NIFTY PUT (15m Candles)")
 
     except Exception as e: 
         st.error(f"Error: {e}")
