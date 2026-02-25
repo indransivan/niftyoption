@@ -27,7 +27,7 @@ def send_telegram(message):
         st.error(f"Telegram Error: {e}")
 
 # --- 2. INDICATOR LOGIC ---
-def calculate_supertrend(df, period=10, multiplier=3):
+def calculate_supertrend(df, period=7, multiplier=2.2):
     df = df.copy()
     high, low, close = df['high'], df['low'], df['close']
     tr1 = high - low
