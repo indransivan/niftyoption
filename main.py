@@ -80,26 +80,18 @@ app = FastAPI(title="NIFTY 500 Low-Risk MACD Dashboard")
 # Breeze initialisation
 # ============================================================
 
-BREEZE_API_KEY = os.getenv("3194b6xL482162_16NkJ368y350336i&")
-BREEZE_API_SECRET = os.getenv("(7@1q7426%p614#fk015~J9%4_$3v6Wh")
-BREEZE_SESSION = os.getenv("BREEZE_SESSION")
 
-if not all([BREEZE_API_KEY, BREEZE_API_SECRET, BREEZE_SESSION]):
-    raise RuntimeError(
-        "Missing Breeze credentials. Set BREEZE_API_KEY, "
-        "BREEZE_API_SECRET and BREEZE_SESSION."
-    )
+API_KEY = "3194b6xL482162_16NkJ368y350336i&"
+API_SECRET = "(7@1q7426%p614#fk015~J9%4_$3v6Wh"
 
-breeze = BreezeConnect(api_key=BREEZE_API_KEY)
+session_token = st.sidebar.text_input("Breeze Session Token", type="password")
 
-breeze.generate_session(
-    api_secret=BREEZE_API_SECRET,
-    session_token=BREEZE_SESSION,
-)
-
-# Breeze calls are synchronous. Lock prevents simultaneous requests
-# from multiple WebSocket clients using the same Breeze connection.
-breeze_lock = Lock()
+if session_token:
+    try:
+        breeze = BreezeConnect(api_key=API_KEY)
+        breeze.generate_session(api_secret=API_SECRET, session_token=session_token)
+    except Exception as e: 
+        st.error(f"Error: {e}")		
 
 
 # ============================================================
