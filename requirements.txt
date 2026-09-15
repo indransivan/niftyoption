@@ -1,7 +1,6 @@
-fastapi
-uvicorn[standard]
+streamlit
+breeze-connect
 pandas
 numpy
+plotly
 python-dotenv
-breeze-connect
-streamlit
