@@ -1,14 +1,36 @@
 services:
   - type: web
-    name: nifty-dashboard
-    env: python
+    name: nifty-macd-dashboard
+    runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: BREEZE_API_KEY
-        sync: false  # Set in Render dashboard
-      - key: BREEZE_API_SECRET
-        sync: false
-      - key: BREEZE_SESSION
-        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.9
 
+      - key: STOCK_LIST_FILE
+        value: ind_nifty500list.csv
+
+      - key: BETA_LIMIT
+        value: "0.7"
+
+      - key: SHARPE_LIMIT
+        value: "1.5"
+
+      - key: VOLATILITY_LIMIT
+        value: "30"
+
+      - key: RISK_FREE_RATE
+        value: "0.06"
+
+      - key: MAX_DISPLAY_STOCKS
+        value: "25"
+
+      - key: SCREENING_CACHE_HOURS
+        value: "24"
+
+      - key: CHART_REFRESH_SECONDS
+        value: "300"
+
+      - key: API_REQUEST_DELAY_SECONDS
+        value: "0.70"
