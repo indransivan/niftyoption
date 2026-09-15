@@ -82,7 +82,7 @@ app = FastAPI(title="NIFTY 500 Low-Risk MACD Dashboard")
 
 BREEZE_API_KEY = os.getenv("3194b6xL482162_16NkJ368y350336i&")
 BREEZE_API_SECRET = os.getenv("(7@1q7426%p614#fk015~J9%4_$3v6Wh")
-BREEZE_SESSION = os.getenv("57038702")
+BREEZE_SESSION = os.getenv("57038769")
 
 if not all([BREEZE_API_KEY, BREEZE_API_SECRET, BREEZE_SESSION]):
     raise RuntimeError(
