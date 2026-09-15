@@ -1,7 +1,6 @@
-streamlit
+fastapi
+uvicorn[standard]
 pandas
-matplotlib
-plotly
-requests
+numpy
+python-dotenv
 breeze-connect
-streamlit-autorefresh
