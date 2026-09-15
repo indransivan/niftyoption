@@ -126,14 +126,15 @@ screening_task: asyncio.Task | None = None
 # General helpers
 # ============================================================
 
-def normalise_breeze_response(response: dict) -> list"""
+def normalise_breeze_response(response: dict) -> list:
+    """
     Return the Success list from a Breeze response.
 
-    Breeze can return:
+    Breeze may return:
         {"Success": [...]}
         {"Success": None, "Error": "..."}
     """
-
+    
     if not isinstance(response, dict):
         return []
 
